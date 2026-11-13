@@ -180,10 +180,11 @@ Configure and run the remote harness:
    - **Without a `modelConfig`, the coding agent uses its default model**; see
      [Choose the model](#choose-the-model).
 
-6. **Call the agent** with the kagent CLI: start a conversation, then send
-   it a task.
+6. **Call the agent** with the kagent CLI: wait until it's ready, start a
+   conversation, then send it a task.
 
    ```sh
+   kubectl wait -n kagent agent/my-laptop --for=condition=Ready --timeout=5m
    SESSION=$(kagent agent session create --agent my-laptop -o json | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
    kagent agent invoke --session "$SESSION" --stream \
      --task "List the files in your working directory"
