@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # The runner on your machine: remote-harness with Claude Code, Codex, git and
 # gh. It runs as user 10001 and keeps everything it writes under the /work
 # volume, so it works with --read-only and --tmpfs /tmp.
-FROM node:22-bookworm-slim AS runner
+FROM node:25-bookworm-slim AS runner
 ARG CLAUDE_CODE_VERSION=2.1.323
 ARG CODEX_VERSION=0.168.0
 RUN apt-get update \
