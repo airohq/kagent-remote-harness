@@ -2,5 +2,4 @@
 .github
 docs
 *.md
-runner.env
-claude.env
+.env

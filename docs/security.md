@@ -118,8 +118,8 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 
 | Credential | Lives in | Rotate | Revoke |
 | --- | --- | --- | --- |
-| The runner's token | `runner.env`, readable only by you (`chmod 600`), and a Secret only the EgressPolicy reads | Write a new `runner.env`, recreate the Secret from it, restart the runner | Delete the Secret and stop the runner |
-| The coding agent's login, such as `CLAUDE_CODE_OAUTH_TOKEN` | `claude.env`, readable only by you (`chmod 600`), and the container's environment | Create a new one, write a new `claude.env`, restart the runner | Revoke it at the provider |
+| The runner's token | `.env`, readable only by you (`chmod 600`), and a Secret only the EgressPolicy reads | Put a new one in `.env`, recreate the Secret from it, restart the runner | Delete the Secret and stop the runner |
+| The coding agent's login, such as `CLAUDE_CODE_OAUTH_TOKEN` | `.env`, and the container's environment | Create a new one, put it in `.env`, restart the runner | Revoke it at the provider |
 | A git token, if the agent pushes | The container's environment | Create a new one and restart the runner | Revoke it at the git host; use a fine-grained token for only the repositories the agent needs |
 
 - **The coding agent never gets the runner's token.** The runner removes it

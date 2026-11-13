@@ -63,33 +63,23 @@ secure the network and the sandbox some other way; see [Security](#security).
 
 ## Get started: Claude Code + ngrok tunnel + Docker sandbox
 
-1. **Create the runner's token** in a file only you can read, so it never
-   appears on a command line:
+1. **Create your `.env`** from the example, and add two tokens to it: the
+   runner's token, from `openssl rand -hex 32`, and your Claude Code token,
+   from `claude setup-token`. The file's comments say which goes where.
 
    ```sh
-   echo "REMOTE_HARNESS_TOKEN=$(openssl rand -hex 32)" > runner.env && chmod 600 runner.env
+   curl -fsSL https://raw.githubusercontent.com/airohq/kagent-remote-harness/main/.env.example -o .env
+   chmod 600 .env
    ```
 
-2. **Create a Claude Code token** in a second file. `claude setup-token`
-   signs you in with your browser and prints a long-lived token:
-
-   ```sh
-   claude setup-token   # copy the token it prints
-   read -rs TOKEN       # paste it; it stays off the screen and out of your history
-   echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" > claude.env && chmod 600 claude.env
-   ```
-
-   You do this once; the runner reads the file on every start. An
-   `ANTHROPIC_API_KEY=` line works too, in place of the token.
-
-3. **Start the runner in a hardened container**, on a port only your machine
+2. **Start the runner in a hardened container**, on a port only your machine
    reaches. This runs Claude Code; for Codex, see [Harnesses](#harnesses).
 
    ```sh
    docker run --rm -it -p 127.0.0.1:8080:8080 \
      --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
      --memory 4g --cpus 2 --pids-limit 512 \
-     --env-file runner.env --env-file claude.env \
+     --env-file .env \
      -v remote-harness:/work \
      ghcr.io/airohq/kagent-remote-harness/runner \
      serve --harness claude --claude-permission-mode acceptEdits
@@ -99,7 +89,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    [The execution boundary](docs/security.md#the-execution-boundary) says
    what each does.
 
-4. **Expose it with ngrok:**
+3. **Expose it with ngrok:**
 
    ```sh
    ngrok http 127.0.0.1:8080 --url https://<your-domain>.ngrok-free.app
@@ -108,13 +98,14 @@ secure the network and the sandbox some other way; see [Security](#security).
    Check it: `curl https://<your-domain>.ngrok-free.app/v1/info` answers
    `401` without the token.
 
-5. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
+4. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
    only your ngrok URL, and its gateway adds the token, so the token never
-   enters the sandbox.
+   enters the sandbox. The Secret gets only the runner's token from `.env`,
+   not your Claude Code token.
 
    ```sh
    kubectl create secret generic my-laptop-runner -n <namespace> \
-     --from-env-file=runner.env
+     --from-env-file=<(grep '^REMOTE_HARNESS_TOKEN=' .env)
    ```
 
    ```yaml
@@ -157,7 +148,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    Without a `modelConfig`, the coding agent uses its default model; see
    [Choose the model](#choose-the-model).
 
-6. **Call the agent** with the kagent CLI, through the kagent controller:
+5. **Call the agent** with the kagent CLI, through the kagent controller:
 
    ```sh
    kubectl port-forward -n kagent svc/kagent-controller 8083:8083
@@ -258,8 +249,8 @@ of the process it runs in: your files, your SSH keys, your logins.
 - **Trust what triggers the agent.** Anyone who can message the agent, or who
   gets the runner's token, can make it run commands. For untrusted input, take
   tools away or use a disposable environment.
-- **The token keeps others out.** Keep it in `runner.env` and in a Secret
-  only the EgressPolicy reads.
+- **The token keeps others out.** Keep it in `.env` and in a Secret only the
+  EgressPolicy reads.
 
 [Security](docs/security.md) covers each of these in detail.
 
