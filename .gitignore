@@ -1,1 +1,4 @@
-.env
+# Local secrets: never commit them. Only the example is tracked.
+*.env
+.env*
+!.env.example
