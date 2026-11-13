@@ -70,8 +70,9 @@ You need:
   with a [static domain](https://dashboard.ngrok.com/domains)
 - [Claude Code](https://code.claude.com/docs/en/setup) with a Claude
   subscription, for `claude setup-token`
-- `kubectl` and the [kagent CLI](https://kagent.dev/docs), with access to a
-  namespace in your kagent cluster
+- `kubectl`, with access to your kagent cluster's `kagent` namespace
+- The [kagent CLI](https://github.com/kagent-dev/kagent/releases) 1.0, the
+  same version as your cluster. kagent 0.10's CLI can't call kagent 1.0
 
 Configure and run the remote harness:
 
@@ -117,7 +118,7 @@ Configure and run the remote harness:
 
 5. **Create the agent in kagent**, in another terminal, in the folder with
    `.env`. Set your ngrok URL in the first line, then paste the rest as it
-   is. It uses your kubectl context's namespace.
+   is.
 
    ```sh
    NGROK_URL=https://<your-domain>.ngrok-free.app
@@ -126,10 +127,10 @@ Configure and run the remote harness:
    HARNESS_IMAGE=ghcr.io/airohq/kagent-remote-harness@$(docker buildx imagetools inspect \
      ghcr.io/airohq/kagent-remote-harness:latest --format '{{.Manifest.Digest}}')
 
-   kubectl create secret generic my-laptop-runner \
+   kubectl create secret generic my-laptop-runner -n kagent \
      --from-env-file=<(grep '^REMOTE_HARNESS_TOKEN=' .env)
 
-   kubectl apply -f - <<EOF
+   kubectl apply -n kagent -f - <<EOF
    apiVersion: api.kagent.dev/v1alpha3
    kind: EgressPolicy
    metadata: {name: my-laptop}
@@ -170,20 +171,21 @@ Configure and run the remote harness:
 
    - **The Secret gets only the runner's token** from `.env`, not your Claude
      Code token.
-   - **The Substrate settings are the defaults**: the `kagent-default` worker
-     pool that kagent's chart creates, and Substrate's own snapshot bucket.
-     Change them if your install differs.
+   - **The objects go in the `kagent` namespace, with kagent's defaults**:
+     the `kagent-default` worker pool, which kagent's chart creates there,
+     and Substrate's own snapshot bucket. Another namespace needs a worker
+     pool of its own.
    - **The EgressPolicy lets the sandbox reach only your ngrok URL**, and its
      gateway adds the token, so the token never enters the sandbox.
    - **Without a `modelConfig`, the coding agent uses its default model**; see
      [Choose the model](#choose-the-model).
 
-6. **Call the agent** with the kagent CLI, in the same terminal:
+6. **Call the agent** with the kagent CLI: start a conversation, then send
+   it a task.
 
    ```sh
-   kubectl port-forward -n kagent svc/kagent-controller 8083:8083 &
-   kagent invoke -n "$(kubectl config view --minify -o jsonpath='{..namespace}')" \
-     --agent my-laptop --stream \
+   SESSION=$(kagent agent session create --agent my-laptop -o json | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+   kagent agent invoke --session "$SESSION" --stream \
      --task "List the files in your working directory"
    ```
 
@@ -224,14 +226,14 @@ the CLI's own login.
 ```yaml
 apiVersion: api.kagent.dev/v1alpha3
 kind: ModelConfig
-metadata: {name: opus, namespace: <namespace>}
+metadata: {name: opus, namespace: kagent}
 spec:
   provider: Anthropic
   model: opus            # claude --model opus
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
-metadata: {name: my-laptop, namespace: <namespace>}
+metadata: {name: my-laptop, namespace: kagent}
 spec:
   template:
     inline:
