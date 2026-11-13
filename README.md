@@ -73,6 +73,9 @@ You need:
 - `kubectl` and the [kagent CLI](https://kagent.dev/docs), with access to a
   namespace in your kagent cluster
 
+The steps start the runner in a container on your machine, expose it to the
+cluster through ngrok, and create a kagent agent that sends its turns there.
+
 1. **Copy the example `.env`**, readable only by you:
 
    ```sh
