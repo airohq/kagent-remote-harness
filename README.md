@@ -1,13 +1,13 @@
 # kagent-remote-harness
 
+> [!CAUTION]
+> **Early alpha. Use at your own risk.** It gives an agent in a cluster code
+> execution on your machine; read [Security](#security) before you start.
+
 Run a [kagent](https://kagent.dev) agent's turns on your own machine, with
 your local coding agent, like Claude Code or Codex. Like Claude Code Remote
 Control, but for kagent: you talk to the agent in kagent, and your machine
 does the work.
-
-> [!CAUTION]
-> **Early alpha. Use at your own risk.** It gives an agent in a cluster code
-> execution on your machine; read [Security](#security) before you start.
 
 ## How it works
 
@@ -61,7 +61,7 @@ resumes.
 **Both options are optional, and both are recommended.** Without them, you
 secure the network and the sandbox some other way; see [Security](#security).
 
-## Get started with an ngrok tunnel and a Docker sandbox
+## Get started: Claude Code + ngrok tunnel + Docker sandbox
 
 1. **Create the runner's token** in a file only you can read, so it never
    appears on a command line:
@@ -70,7 +70,19 @@ secure the network and the sandbox some other way; see [Security](#security).
    umask 077; echo "REMOTE_HARNESS_TOKEN=$(openssl rand -hex 32)" > runner.env
    ```
 
-2. **Start the runner in a hardened container**, on a port only your machine
+2. **Create a Claude Code token** for the runner. `claude setup-token` signs
+   you in with your browser and prints a long-lived token. Copy it, then
+   paste it into `read`, which keeps it off the screen and out of your shell
+   history:
+
+   ```sh
+   claude setup-token
+   read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
+   ```
+
+   An `ANTHROPIC_API_KEY` works too, in place of the token.
+
+3. **Start the runner in a hardened container**, on a port only your machine
    reaches. This runs Claude Code; for Codex, see [Harnesses](#harnesses).
 
    ```sh
@@ -83,12 +95,11 @@ secure the network and the sandbox some other way; see [Security](#security).
      serve --harness claude --claude-permission-mode acceptEdits
    ```
 
-   `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`; an
-   `ANTHROPIC_API_KEY` works too. The flags on the second and third lines
-   harden the container; [The execution boundary](docs/security.md#the-execution-boundary)
-   says what each does.
+   The flags on the second and third lines harden the container;
+   [The execution boundary](docs/security.md#the-execution-boundary) says
+   what each does.
 
-3. **Expose it with ngrok:**
+4. **Expose it with ngrok:**
 
    ```sh
    ngrok http 127.0.0.1:8080 --url https://<your-domain>.ngrok-free.app
@@ -97,7 +108,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    Check it: `curl https://<your-domain>.ngrok-free.app/v1/info` answers
    `401` without the token.
 
-4. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
+5. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
    only your ngrok URL, and its gateway adds the token, so the token never
    enters the sandbox.
 
@@ -146,7 +157,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    Without a `modelConfig`, the coding agent uses its default model; see
    [Choose the model](#choose-the-model).
 
-5. **Call the agent** with the kagent CLI, through the kagent controller:
+6. **Call the agent** with the kagent CLI, through the kagent controller:
 
    ```sh
    kubectl port-forward -n kagent svc/kagent-controller 8083:8083
@@ -238,7 +249,7 @@ is your responsibility.** Every turn runs your coding agent with the access
 of the process it runs in: your files, your SSH keys, your logins.
 
 - **Sandbox: run the runner in a hardened container**, as in
-  [Get started](#get-started-with-an-ngrok-tunnel-and-a-docker-sandbox):
+  [Get started](#get-started-claude-code--ngrok-tunnel--docker-sandbox):
   non-root, no capabilities, a read-only root, resource limits, and only a
   working copy and narrow credentials. The
   container is defense in depth, not a boundary for hostile input.
