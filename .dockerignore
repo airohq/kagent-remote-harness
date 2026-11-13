@@ -3,3 +3,4 @@
 docs
 *.md
 runner.env
+claude.env

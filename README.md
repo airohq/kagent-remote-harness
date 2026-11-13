@@ -70,17 +70,18 @@ secure the network and the sandbox some other way; see [Security](#security).
    umask 077; echo "REMOTE_HARNESS_TOKEN=$(openssl rand -hex 32)" > runner.env
    ```
 
-2. **Create a Claude Code token** for the runner. `claude setup-token` signs
-   you in with your browser and prints a long-lived token. Copy it, then
-   paste it into `read`, which keeps it off the screen and out of your shell
-   history:
+2. **Create a Claude Code token** in a second file. `claude setup-token`
+   signs you in with your browser and prints a long-lived token. Copy it,
+   then paste it into `read`, which keeps it off the screen and out of your
+   shell history:
 
    ```sh
    claude setup-token
-   read -rs CLAUDE_CODE_OAUTH_TOKEN && export CLAUDE_CODE_OAUTH_TOKEN
+   umask 077; read -rs t && echo "CLAUDE_CODE_OAUTH_TOKEN=$t" > claude.env; unset t
    ```
 
-   An `ANTHROPIC_API_KEY` works too, in place of the token.
+   You do this once; the runner reads the file on every start. An
+   `ANTHROPIC_API_KEY=` line works too, in place of the token.
 
 3. **Start the runner in a hardened container**, on a port only your machine
    reaches. This runs Claude Code; for Codex, see [Harnesses](#harnesses).
@@ -89,7 +90,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    docker run --rm -it -p 127.0.0.1:8080:8080 \
      --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
      --memory 4g --cpus 2 --pids-limit 512 \
-     --env-file runner.env -e CLAUDE_CODE_OAUTH_TOKEN \
+     --env-file runner.env --env-file claude.env \
      -v remote-harness:/work \
      ghcr.io/airohq/kagent-remote-harness/runner \
      serve --harness claude --claude-permission-mode acceptEdits
