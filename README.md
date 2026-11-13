@@ -67,17 +67,16 @@ secure the network and the sandbox some other way; see [Security](#security).
    appears on a command line:
 
    ```sh
-   umask 077; echo "REMOTE_HARNESS_TOKEN=$(openssl rand -hex 32)" > runner.env
+   echo "REMOTE_HARNESS_TOKEN=$(openssl rand -hex 32)" > runner.env && chmod 600 runner.env
    ```
 
 2. **Create a Claude Code token** in a second file. `claude setup-token`
-   signs you in with your browser and prints a long-lived token. Copy it,
-   then paste it into `read`, which keeps it off the screen and out of your
-   shell history:
+   signs you in with your browser and prints a long-lived token:
 
    ```sh
-   claude setup-token
-   umask 077; read -rs t && echo "CLAUDE_CODE_OAUTH_TOKEN=$t" > claude.env; unset t
+   claude setup-token   # copy the token it prints
+   read -rs TOKEN       # paste it; it stays off the screen and out of your history
+   echo "CLAUDE_CODE_OAUTH_TOKEN=$TOKEN" > claude.env && chmod 600 claude.env
    ```
 
    You do this once; the runner reads the file on every start. An
