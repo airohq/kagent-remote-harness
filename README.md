@@ -110,10 +110,10 @@ Configure and run the remote harness:
 4. **Expose it with ngrok:**
 
    ```sh
-   ngrok http 127.0.0.1:8080 --url https://<your-domain>.ngrok-free.app
+   ngrok http 127.0.0.1:8080 --url https://<your-domain>.ngrok-free.dev
    ```
 
-   Check it: `curl https://<your-domain>.ngrok-free.app/v1/info` answers
+   Check it: `curl https://<your-domain>.ngrok-free.dev/v1/info` answers
    `401` without the token.
 
 5. **Create the agent in kagent**, in another terminal, in the folder with
@@ -121,7 +121,7 @@ Configure and run the remote harness:
    is.
 
    ```sh
-   NGROK_URL=https://<your-domain>.ngrok-free.app
+   NGROK_URL=https://<your-domain>.ngrok-free.dev
 
    # kagent takes a harness image only by digest.
    HARNESS_IMAGE=ghcr.io/airohq/kagent-remote-harness@$(docker buildx imagetools inspect \
