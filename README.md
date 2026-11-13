@@ -73,7 +73,7 @@ You need:
 - `kubectl` and the [kagent CLI](https://kagent.dev/docs), with access to a
   namespace in your kagent cluster
 
-Run the remote harness:
+Configure and run the remote harness:
 
 1. **Copy the example `.env`**, readable only by you:
 
@@ -115,23 +115,29 @@ Run the remote harness:
    Check it: `curl https://<your-domain>.ngrok-free.app/v1/info` answers
    `401` without the token.
 
-5. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
-   only your ngrok URL, and its gateway adds the token, so the token never
-   enters the sandbox. The Secret gets only the runner's token from `.env`,
-   not your Claude Code token.
+5. **Create the agent in kagent**, in another terminal. Set your values in
+   the first four lines, then paste the rest as it is.
 
    ```sh
-   kubectl create secret generic my-laptop-runner -n <namespace> \
-     --from-env-file=<(grep '^REMOTE_HARNESS_TOKEN=' .env)
-   ```
+   NAMESPACE=<your namespace>
+   WORKER_POOL=<your Substrate worker pool>
+   SNAPSHOT_LOCATION=<your Substrate snapshot location, such as gs://bucket/path/>
+   NGROK_URL=https://<your-domain>.ngrok-free.app
 
-   ```yaml
+   # kagent takes a harness image only by digest.
+   HARNESS_IMAGE=ghcr.io/airohq/kagent-remote-harness@$(docker buildx imagetools inspect \
+     ghcr.io/airohq/kagent-remote-harness:latest --format '{{.Manifest.Digest}}')
+
+   kubectl create secret generic my-laptop-runner -n "$NAMESPACE" \
+     --from-env-file=<(grep '^REMOTE_HARNESS_TOKEN=' .env)
+
+   kubectl apply -n "$NAMESPACE" -f - <<EOF
    apiVersion: api.kagent.dev/v1alpha3
    kind: EgressPolicy
-   metadata: {name: my-laptop, namespace: <namespace>}
+   metadata: {name: my-laptop}
    spec:
      destinations:
-       - origin: https://<your-domain>.ngrok-free.app
+       - origin: $NGROK_URL
          authentication:
            header: Authorization
            prefix: "Bearer "
@@ -139,20 +145,21 @@ Run the remote harness:
    ---
    apiVersion: api.kagent.dev/v1alpha3
    kind: Harness
-   metadata: {name: my-laptop, namespace: <namespace>}
+   metadata: {name: my-laptop}
    spec:
      byo: {}
      workload:
-       image: ghcr.io/airohq/kagent-remote-harness:<version>
+       image: $HARNESS_IMAGE
        command: ["/harness"]
      env:
-       - {name: REMOTE_HARNESS_URL, value: https://<your-domain>.ngrok-free.app}
+       - {name: REMOTE_HARNESS_URL, value: $NGROK_URL}
      substrate:
-       workerPoolRef: {name: <worker pool>}
+       workerPoolRef: {name: $WORKER_POOL}
+       snapshotPolicy: {location: $SNAPSHOT_LOCATION}
    ---
    apiVersion: api.kagent.dev/v1alpha3
    kind: Agent
-   metadata: {name: my-laptop, namespace: <namespace>}
+   metadata: {name: my-laptop}
    spec:
      harnessRef: {name: my-laptop}
      egressPolicyRefs: [{name: my-laptop}]
@@ -160,19 +167,21 @@ Run the remote harness:
        inline:
          description: The coding agent on my laptop.
          systemPrompt: You work in the repository in your working directory.
+   EOF
    ```
 
-   Without a `modelConfig`, the coding agent uses its default model; see
-   [Choose the model](#choose-the-model).
+   - **The Secret gets only the runner's token** from `.env`, not your Claude
+     Code token.
+   - **The EgressPolicy lets the sandbox reach only your ngrok URL**, and its
+     gateway adds the token, so the token never enters the sandbox.
+   - **Without a `modelConfig`, the coding agent uses its default model**; see
+     [Choose the model](#choose-the-model).
 
-6. **Call the agent** with the kagent CLI, through the kagent controller:
+6. **Call the agent** with the kagent CLI, in the same terminal:
 
    ```sh
-   kubectl port-forward -n kagent svc/kagent-controller 8083:8083
-   ```
-
-   ```sh
-   kagent invoke -n <namespace> --agent my-laptop --stream \
+   kubectl port-forward -n kagent svc/kagent-controller 8083:8083 &
+   kagent invoke -n "$NAMESPACE" --agent my-laptop --stream \
      --task "List the files in your working directory"
    ```
 
