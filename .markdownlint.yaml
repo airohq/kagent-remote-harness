@@ -1,0 +1,4 @@
+# Long lines are fine in tables and code; prose wraps at 80.
+MD013:
+  tables: false
+  code_blocks: false
