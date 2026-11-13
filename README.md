@@ -63,16 +63,21 @@ secure the network and the sandbox some other way; see [Security](#security).
 
 ## Get started: Claude Code + ngrok tunnel + Docker sandbox
 
-1. **Create your `.env`** from the example, and add two tokens to it: the
-   runner's token, from `openssl rand -hex 32`, and your Claude Code token,
-   from `claude setup-token`. The file's comments say which goes where.
+1. **Copy the example `.env`**, readable only by you:
 
    ```sh
    curl -fsSL https://raw.githubusercontent.com/airohq/kagent-remote-harness/main/.env.example -o .env
    chmod 600 .env
    ```
 
-2. **Start the runner in a hardened container**, on a port only your machine
+2. **Set the two tokens in `.env`:**
+
+   | Variable | Value |
+   | --- | --- |
+   | `REMOTE_HARNESS_TOKEN` | The runner's token, which kagent sends and the runner checks: the output of `openssl rand -hex 32` |
+   | `CLAUDE_CODE_OAUTH_TOKEN` | Your Claude Code token: run `claude setup-token`, and paste the token it prints. It uses your Claude subscription |
+
+3. **Start the runner in a hardened container**, on a port only your machine
    reaches. This runs Claude Code; for Codex, see [Harnesses](#harnesses).
 
    ```sh
@@ -89,7 +94,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    [The execution boundary](docs/security.md#the-execution-boundary) says
    what each does.
 
-3. **Expose it with ngrok:**
+4. **Expose it with ngrok:**
 
    ```sh
    ngrok http 127.0.0.1:8080 --url https://<your-domain>.ngrok-free.app
@@ -98,7 +103,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    Check it: `curl https://<your-domain>.ngrok-free.app/v1/info` answers
    `401` without the token.
 
-4. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
+5. **Create the agent in kagent.** The EgressPolicy lets the sandbox reach
    only your ngrok URL, and its gateway adds the token, so the token never
    enters the sandbox. The Secret gets only the runner's token from `.env`,
    not your Claude Code token.
@@ -148,7 +153,7 @@ secure the network and the sandbox some other way; see [Security](#security).
    Without a `modelConfig`, the coding agent uses its default model; see
    [Choose the model](#choose-the-model).
 
-5. **Call the agent** with the kagent CLI, through the kagent controller:
+6. **Call the agent** with the kagent CLI, through the kagent controller:
 
    ```sh
    kubectl port-forward -n kagent svc/kagent-controller 8083:8083
