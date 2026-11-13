@@ -63,6 +63,13 @@ secure the network and the sandbox some other way; see [Security](#security).
 
 ## Get started: Claude Code + ngrok tunnel + Docker sandbox
 
+You need:
+
+- [Docker](https://docs.docker.com/get-docker/)
+- [ngrok](https://ngrok.com/download), signed in (`ngrok config add-authtoken`), with a [static domain](https://dashboard.ngrok.com/domains)
+- [Claude Code](https://code.claude.com/docs/en/setup) with a Claude subscription, for `claude setup-token`
+- `kubectl` and the [kagent CLI](https://kagent.dev/docs), with access to a namespace in your kagent cluster
+
 1. **Copy the example `.env`**, readable only by you:
 
    ```sh
