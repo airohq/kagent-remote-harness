@@ -13,11 +13,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 	"syscall"
 	"time"
-
-	"github.com/moby/moby/client"
 
 	"github.com/airohq/kagent-remote-harness/internal/supervisor"
 	"github.com/airohq/kagent-remote-harness/runner"
@@ -48,11 +45,26 @@ func (o workerOptions) adapter() (runner.Harness, error) {
 	return runner.NewHarness(o.harness, mode, nil)
 }
 
-func supervise(args []string, logger *slog.Logger) error {
+// openBackend selects how turns run. Backend-specific startup belongs here.
+// the listener and the Tunnel use the same protocol for every implementation.
+func openBackend(kind, name, image string, opts workerOptions) (supervisor.Backend, error) {
+	switch kind {
+	case "container":
+		args := []string{"worker", "--harness", opts.harness,
+			"--codex-sandbox", opts.codexMode, "--claude-permission-mode", opts.claudeMode,
+			"--idle-timeout", opts.idle.String(), "--turn-timeout", opts.timeout.String()}
+		return supervisor.NewContainer(opts.harness, name, image, opts.idle, args)
+	default:
+		return nil, fmt.Errorf("unknown runner %q: available runners: container", kind)
+	}
+}
+
+func supervise(args []string, logger *slog.Logger) (err error) {
 	fs := flag.NewFlagSet("supervise", flag.ContinueOnError)
 	var opts workerOptions
 	opts.flags(fs)
-	name := fs.String("name", os.Getenv("REMOTE_HARNESS_NAME"), "name of the persistent runner volume")
+	kind := fs.String("runner", "container", "execution backend (available: container)")
+	name := fs.String("name", os.Getenv("REMOTE_HARNESS_NAME"), "persistent runner name (the container backend uses it for the volume)")
 	socket := fs.String("socket", os.Getenv("REMOTE_HARNESS_SOCKET"), "Unix socket to serve in a private directory")
 	image := fs.String("image", "ghcr.io/airohq/kagent-remote-harness/runner:latest", "locally available runner image with worker support")
 	if err := fs.Parse(args); err != nil {
@@ -60,9 +72,6 @@ func supervise(args []string, logger *slog.Logger) error {
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected supervisor argument %q", fs.Arg(0))
-	}
-	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,120}$`).MatchString(*name) {
-		return errors.New("set --name to a volume name of up to 121 letters, digits, dots, underscores or hyphens")
 	}
 	if *socket == "" {
 		return errors.New("set --socket to a path in a private directory")
@@ -75,18 +84,16 @@ func supervise(args []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	engine, err := client.New(client.FromEnv)
-	if err != nil {
-		return err
-	}
-	defer engine.Close()
 	host, err := os.Hostname()
 	if err != nil {
 		return err
 	}
-	backend := &supervisor.Container{Harness: h, Engine: engine, Image: *image, Volume: *name, Idle: opts.idle,
-		WorkerArgs: []string{"worker", "--harness", opts.harness, "--codex-sandbox", opts.codexMode, "--claude-permission-mode", opts.claudeMode, "--idle-timeout", opts.idle.String(), "--turn-timeout", opts.timeout.String()}}
-	handler, err := runner.New(runner.Config{Harness: backend, Token: token, Machine: host + "-" + *name, Workdir: "/work/workspace", Env: []string{}, TurnTimeout: opts.timeout, Logger: logger})
+	backend, err := openBackend(*kind, *name, *image, opts)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, backend.Close()) }()
+	handler, err := runner.New(runner.Config{Harness: supervisor.OnBackend(h, backend), Token: token, Machine: host + "-" + *name, Workdir: ".", Env: []string{}, TurnTimeout: opts.timeout, Logger: logger})
 	if err != nil {
 		return err
 	}
@@ -111,7 +118,7 @@ func supervise(args []string, logger *slog.Logger) error {
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
-	return errors.Join(err, backend.Close())
+	return err
 }
 
 // worker is PID 1 in the runner image. The engine's attached stdin/stdout

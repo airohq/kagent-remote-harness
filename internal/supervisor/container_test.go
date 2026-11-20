@@ -24,6 +24,8 @@ type memoryEngine struct {
 	started chan string
 }
 
+func (e memoryEngine) Close() error { return nil }
+
 func (e memoryEngine) ContainerCreate(_ context.Context, opts client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	e.created <- opts
 	return client.ContainerCreateResult{ID: "owned"}, nil
@@ -64,7 +66,7 @@ func (e memoryEngine) ContainerRemove(_ context.Context, id string, _ client.Con
 
 func TestOnDemandLifecycle(t *testing.T) {
 	e := memoryEngine{make(chan client.ContainerCreateOptions, 4), make(chan string, 4), make(chan string, 8)}
-	c := &Container{Engine: e, Harness: runner.Codex{}, Volume: "work", Image: "worker", Idle: 100 * time.Millisecond}
+	c := &Container{engine: e, harness: "codex", Volume: "work", Image: "worker", Idle: 100 * time.Millisecond}
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
 			t.Error(err)
@@ -73,7 +75,7 @@ func TestOnDemandLifecycle(t *testing.T) {
 	token := strings.Repeat("a", 32)
 	t.Setenv("OPENAI_API_KEY", "provider")
 	t.Setenv("REMOTE_HARNESS_TOKEN", token)
-	srv, err := runner.New(runner.Config{Harness: c, Token: token, Machine: "machine", Workdir: "/work/workspace"})
+	srv, err := runner.New(runner.Config{Harness: OnBackend(runner.Codex{}, c), Token: token, Machine: "machine", Workdir: "/work/workspace"})
 	if err != nil {
 		t.Fatal(err)
 	}

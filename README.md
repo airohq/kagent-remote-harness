@@ -208,7 +208,8 @@ go install ./cmd/remote-harness
 docker build --target runner -t local/remote-harness:dev .
 ```
 
-The supervisor uses the Moby Go client. Set `DOCKER_HOST` to select another
+Select the execution backend with `--runner`. The first backend, `container`,
+is the default. It uses the Moby Go client. Set `DOCKER_HOST` to select another
 Engine API socket, such as a Podman service. With an engine managing named
 volumes, create/start/attach/remove, and the documented resource and security
 settings, the same helper can serve the worker. The engine receives turns on

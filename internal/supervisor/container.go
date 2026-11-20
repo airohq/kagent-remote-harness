@@ -1,5 +1,3 @@
-// Package supervisor runs a harness in an on-demand container over the Engine
-// API. The attached stream carries turns and events. No port is published.
 package supervisor
 
 import (
@@ -11,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -25,16 +24,17 @@ import (
 )
 
 type engine interface {
+	io.Closer
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerAttach(context.Context, string, client.ContainerAttachOptions) (client.ContainerAttachResult, error)
 	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 }
 
-// Container implements runner.Harness, keeping one worker warm between turns.
+// Container keeps one worker warm between turns over the Engine API.
 type Container struct {
-	runner.Harness
-	Engine        engine
+	harness       string
+	engine        engine
 	Image, Volume string
 	WorkerArgs    []string
 	Idle          time.Duration
@@ -47,10 +47,23 @@ type Container struct {
 	timer  *time.Timer
 }
 
+// NewContainer opens the configured Engine API client. The worker is created
+// on the first turn.
+func NewContainer(harness, volume, image string, idle time.Duration, workerArgs []string) (*Container, error) {
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,120}$`).MatchString(volume) {
+		return nil, errors.New("set --name to a volume name of up to 121 letters, digits, dots, underscores or hyphens")
+	}
+	engine, err := client.New(client.FromEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &Container{harness: harness, engine: engine, Volume: volume, Image: image, Idle: idle, WorkerArgs: workerArgs}, nil
+}
+
 func (c *Container) start(ctx context.Context) error {
 	var env []string
 	keys := []string{"OPENAI_API_KEY"}
-	if c.Harness.Name() == "claude" {
+	if c.harness == "claude" {
 		keys = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	}
 	for _, key := range keys {
@@ -84,12 +97,12 @@ func (c *Container) start(ctx context.Context) error {
 	// the remaining steps observe cancellation and remove the owned ID.
 	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	created, err := c.Engine.ContainerCreate(createCtx, options)
+	created, err := c.engine.ContainerCreate(createCtx, options)
 	if err != nil {
 		return fmt.Errorf("create runner from %s (load the worker image into this engine first): %w", c.Image, err)
 	}
 	c.id = created.ID
-	attached, err := c.Engine.ContainerAttach(ctx, c.id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
+	attached, err := c.engine.ContainerAttach(ctx, c.id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
 	if err != nil {
 		return err
 	}
@@ -103,11 +116,11 @@ func (c *Container) start(ctx context.Context) error {
 		_, err := stdcopy.StdCopy(writer, os.Stderr, attached.Reader)
 		writer.CloseWithError(err)
 	}()
-	_, err = c.Engine.ContainerStart(ctx, c.id, client.ContainerStartOptions{})
+	_, err = c.engine.ContainerStart(ctx, c.id, client.ContainerStartOptions{})
 	return err
 }
 
-func (c *Container) Run(ctx context.Context, _ runner.Process, turn wire.TurnRequest, emit runner.Emit) error {
+func (c *Container) RunTurn(ctx context.Context, turn wire.TurnRequest, emit runner.Emit) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.timer != nil {
@@ -177,7 +190,7 @@ func (c *Container) exchange(turn wire.TurnRequest, emit runner.Emit) (error, bo
 func (c *Container) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.stop()
+	return errors.Join(c.stop(), c.engine.Close())
 }
 
 func (c *Container) stop() error {
@@ -198,7 +211,7 @@ func (c *Container) stop() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := c.Engine.ContainerRemove(ctx, c.id, client.ContainerRemoveOptions{Force: true})
+	_, err := c.engine.ContainerRemove(ctx, c.id, client.ContainerRemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return fmt.Errorf("remove runner %s: %w", c.id, err)
 	}

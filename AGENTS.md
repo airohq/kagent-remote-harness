@@ -10,7 +10,7 @@ people changing this repository; keep it short.
 | --- | --- |
 | `wire` | The protocol between the harness and the runner. A change here changes `docs/protocol.md` |
 | `runner` | The runner as an `http.Handler`: authentication, limits, and the Claude Code and Codex adapters |
-| `internal/supervisor` | On-demand container workers over an Engine API socket |
+| `internal/supervisor` | Execution backend interface and its container implementation |
 | `internal/harness` | The kagent side: the bootstrap bundle and the relay to the runner |
 | `cmd/remote-harness` | The runner's CLI, `remote-harness serve` |
 | `cmd/harness` | The kagent BYO harness's entry point |
