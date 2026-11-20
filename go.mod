@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/a2aproject/a2a-go/v2 v2.8.0
-	github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120193721-d475058f5521
+	github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120202527-8eccc63dabbe
 	github.com/kagent-dev/kagent/go v0.0.0-20261106154534-3548b7aaf4d9
 	google.golang.org/protobuf v1.36.12
 )
