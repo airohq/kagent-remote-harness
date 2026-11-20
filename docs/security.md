@@ -125,7 +125,8 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 - **The coding agent never gets the runner's token.** The runner removes it
   from the environment it passes on.
 - **The runner logs no prompts or output** unless you pass `--log-content`.
-  Its log has turn IDs, timing and results.
+  Its log has turn IDs, timing and results. Supervisor verbosity adds credential
+  names, event types and fixed descriptions of recognized failures.
 - **The coding agent's output isn't filtered.** Whatever it prints, including
   a credential it can read, streams to kagent and is stored there. Pass only
   credentials you accept the agent seeing.

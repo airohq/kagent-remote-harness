@@ -60,10 +60,10 @@ func NewContainer(harness, volume, image string, idle time.Duration, workerArgs 
 	return &Container{harness: harness, engine: engine, Volume: volume, Image: image, Idle: idle, WorkerArgs: workerArgs}, nil
 }
 
-func (c *Container) start(ctx context.Context) error {
+func providerEnv(harness string) []string {
 	var env []string
 	keys := []string{"OPENAI_API_KEY"}
-	if c.harness == "claude" {
+	if harness == "claude" {
 		keys = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
 	}
 	for _, key := range keys {
@@ -71,6 +71,22 @@ func (c *Container) start(ctx context.Context) error {
 			env = append(env, key+"="+value)
 		}
 	}
+	// Headless Codex reads CODEX_API_KEY. Keep OPENAI_API_KEY available to
+	// existing images and prefer an explicit Codex credential when provided.
+	if harness == "codex" {
+		key := os.Getenv("CODEX_API_KEY")
+		if key == "" {
+			key = os.Getenv("OPENAI_API_KEY")
+		}
+		if key != "" {
+			env = append(env, "CODEX_API_KEY="+key)
+		}
+	}
+	return env
+}
+
+func (c *Container) start(ctx context.Context) error {
+	env := providerEnv(c.harness)
 	pids := int64(512)
 	options := client.ContainerCreateOptions{
 		Name: c.Volume,

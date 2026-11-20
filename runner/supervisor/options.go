@@ -39,6 +39,7 @@ func (o WorkerOptions) Adapter() (runner.Harness, error) {
 // Options selects the execution backend and configures the worker.
 type Options struct {
 	WorkerOptions
+	Verbose bool
 	Backend string
 	Image   string
 }
@@ -46,6 +47,7 @@ type Options struct {
 // BindFlags installs the runner settings and their defaults.
 func (o *Options) BindFlags(fs *flag.FlagSet) {
 	o.WorkerOptions.BindFlags(fs)
+	fs.BoolVar(&o.Verbose, "verbose", false, "show sandbox configuration, credential names, and turn event diagnostics")
 	fs.StringVar(&o.Backend, "sandbox", "container", "execution environment for the coding agent")
 	fs.StringVar(&o.Backend, "runner", "container", "legacy spelling of --sandbox")
 	fs.StringVar(&o.Image, "image", "ghcr.io/airohq/kagent-remote-harness/runner:latest", "locally available runner image with worker support")

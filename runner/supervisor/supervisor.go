@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/airohq/kagent-remote-harness/runner"
@@ -36,7 +37,18 @@ func New(name, token string, opts Options, logger *slog.Logger) (*Supervisor, er
 	if err != nil {
 		return nil, err
 	}
-	handler, err := runner.New(runner.Config{Harness: OnBackend(h, b), Token: token, Machine: machine + "-" + name, Workdir: ".", Env: []string{}, TurnTimeout: opts.TurnTimeout, Logger: logger})
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if opts.Verbose {
+		var names []string
+		for _, entry := range providerEnv(opts.Harness) {
+			key, _, _ := strings.Cut(entry, "=")
+			names = append(names, key)
+		}
+		logger.Info("sandbox configured", "sandbox", opts.Backend, "harness", opts.Harness, "image", opts.Image, "credential_names", names)
+	}
+	handler, err := runner.New(runner.Config{Harness: OnBackend(h, b), Token: token, Machine: machine + "-" + name, Workdir: ".", Env: []string{}, TurnTimeout: opts.TurnTimeout, Verbose: opts.Verbose, Logger: logger})
 	if err != nil {
 		return nil, errors.Join(err, b.Close())
 	}

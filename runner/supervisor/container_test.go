@@ -74,6 +74,7 @@ func TestOnDemandLifecycle(t *testing.T) {
 	})
 	token := strings.Repeat("a", 32)
 	t.Setenv("OPENAI_API_KEY", "provider")
+	t.Setenv("CODEX_API_KEY", "")
 	t.Setenv("REMOTE_HARNESS_TOKEN", token)
 	srv, err := runner.New(runner.Config{Harness: OnBackend(runner.Codex{}, c), Token: token, Machine: "machine", Workdir: "/work/workspace"})
 	if err != nil {
@@ -105,7 +106,7 @@ func TestOnDemandLifecycle(t *testing.T) {
 		t.Fatal("warm turns created multiple workers")
 	}
 	opts := <-e.created
-	if !slices.Equal(opts.Config.Env, []string{"OPENAI_API_KEY=provider"}) || !opts.HostConfig.ReadonlyRootfs || opts.HostConfig.Mounts[0].Source != "work" {
+	if !slices.Equal(opts.Config.Env, []string{"OPENAI_API_KEY=provider", "CODEX_API_KEY=provider"}) || !opts.HostConfig.ReadonlyRootfs || opts.HostConfig.Mounts[0].Source != "work" {
 		t.Fatal("worker configuration")
 	}
 	awaitRemoval := func() {
@@ -138,4 +139,17 @@ func TestOnDemandLifecycle(t *testing.T) {
 		t.Fatal("cancellation blocked")
 	}
 	awaitRemoval()
+}
+
+func TestExplicitCodexCredential(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "specific")
+	t.Setenv("OPENAI_API_KEY", "general")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	if got := providerEnv("codex"); !slices.Equal(got, []string{"OPENAI_API_KEY=general", "CODEX_API_KEY=specific"}) {
+		t.Error("explicit Codex key was not preserved")
+	}
+	if got := providerEnv("claude"); len(got) != 0 {
+		t.Error("Claude received an unrelated credential")
+	}
 }

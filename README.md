@@ -235,6 +235,11 @@ remote-harness supervise --name reviewer --socket "$dir/runner.sock" \
 
 `--idle-timeout` sets how long to keep a warm worker. `--turn-timeout` bounds
 one turn (default 30 minutes). Use a separate volume name for each runner.
+Supervisors accept `--verbose` to report sandbox settings, credential names,
+event types and recognized failures. Credential values and event contents stay
+out of verbose logs. The container passes `CODEX_API_KEY` to headless Codex,
+using the host’s `OPENAI_API_KEY` as a fallback.
+
 The engine receives the selected coding agent's provider credentials.
 Canceling a running turn releases the container. Use the same name and engine
 to resume from its volume.
@@ -249,7 +254,7 @@ runs on your machine:
 | `--harness` | New conversation | Later turns | Signs in with |
 | --- | --- | --- | --- |
 | `claude` | `claude -p --output-format stream-json --verbose --permission-mode <mode> [--model <model>] [--append-system-prompt <instructions>] [<harness args>]` | The same, plus `--resume <session>` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
-| `codex` | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] --sandbox <sandbox> [<harness args>] -`, with the instructions before the prompt | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] -c sandbox_mode="<sandbox>" [<harness args>] resume <thread> -` | `OPENAI_API_KEY`, or your Codex login |
+| `codex` | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] --sandbox <sandbox> [<harness args>] -`, with the instructions before the prompt | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] -c sandbox_mode="<sandbox>" [<harness args>] resume <thread> -` | `CODEX_API_KEY`, or your Codex login. The on-demand container also accepts the host’s `OPENAI_API_KEY`. |
 
 - **`<model>` comes from the Agent's `modelConfig`**, and is left out when
   the Agent has none, so the CLI uses its own default.

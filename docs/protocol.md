@@ -136,6 +136,9 @@ A Go client can embed `runner/supervisor.New`, serve its authenticated HTTP
 handler on its transport, and call `Close` to cancel active turns and release
 the backend. Both execution modes use the same v1 protocol.
 
+Supervisor verbosity reports credential names and event types. Only fixed
+descriptions of recognized failures appear in verbose logs.
+
 A transport can also launch `remote-harness supervise --socket PATH --name NAME`
 with a freshly generated `REMOTE_HARNESS_TOKEN`. An explicit `--sandbox TYPE`
 selects the execution environment. The helper also accepts the original

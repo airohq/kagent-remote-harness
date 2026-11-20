@@ -202,11 +202,13 @@ func (c Codex) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit E
 			failure = ev.Message
 		}
 	})
+	// A terminal provider error is more useful than the CLI's exit status
+	// and stderr tail. Codex can also emit retry errors and later succeed.
+	if ctx.Err() == nil && failure != "" && !completed {
+		return fmt.Errorf("codex: %s", failure)
+	}
 	if err != nil {
 		return err
-	}
-	if failure != "" {
-		return fmt.Errorf("codex: %s", failure)
 	}
 	if !completed {
 		return errors.New("codex ended without completing the turn")
