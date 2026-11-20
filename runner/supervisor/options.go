@@ -19,7 +19,7 @@ type WorkerOptions struct {
 func (o *WorkerOptions) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&o.Harness, "harness", "", "coding agent: claude or codex (required)")
 	fs.StringVar(&o.ClaudePermissionMode, "claude-permission-mode", "", "Claude Code permission mode")
-	fs.StringVar(&o.CodexSandbox, "codex-sandbox", "", "Codex sandbox mode")
+	fs.StringVar(&o.CodexSandbox, "codex-sandbox", "", "filesystem access Codex requests inside the sandbox (e.g. read-only or workspace-write)")
 	fs.DurationVar(&o.IdleTimeout, "idle-timeout", 5*time.Minute, "remove the container after this much idle time")
 	fs.DurationVar(&o.TurnTimeout, "turn-timeout", 30*time.Minute, "maximum time for one turn")
 }
@@ -46,7 +46,8 @@ type Options struct {
 // BindFlags installs the runner settings and their defaults.
 func (o *Options) BindFlags(fs *flag.FlagSet) {
 	o.WorkerOptions.BindFlags(fs)
-	fs.StringVar(&o.Backend, "runner", "container", "execution backend")
+	fs.StringVar(&o.Backend, "sandbox", "container", "execution environment for the coding agent")
+	fs.StringVar(&o.Backend, "runner", "container", "legacy spelling of --sandbox")
 	fs.StringVar(&o.Image, "image", "ghcr.io/airohq/kagent-remote-harness/runner:latest", "locally available runner image with worker support")
 }
 
@@ -60,6 +61,6 @@ func openBackend(kind, name, image string, opts WorkerOptions) (Backend, error) 
 			"--idle-timeout", opts.IdleTimeout.String(), "--turn-timeout", opts.TurnTimeout.String()}
 		return NewContainer(opts.Harness, name, image, opts.IdleTimeout, args)
 	default:
-		return nil, fmt.Errorf("unknown runner %q: available runners: container", kind)
+		return nil, fmt.Errorf("unknown sandbox %q: available sandboxes: container", kind)
 	}
 }

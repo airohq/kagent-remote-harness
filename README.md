@@ -201,6 +201,11 @@ container. A warm worker serves one turn at a time. After five idle minutes
 the supervisor removes the container. The named volume at `/work` keeps the
 workspace and coding agent's sessions across starts.
 
+The Dockerfile's `runner` target installs both Claude Code and Codex in one
+worker image. GitHub Actions publishes it to
+`ghcr.io/airohq/kagent-remote-harness/runner`. The `harness` target builds
+the in-cluster relay at `ghcr.io/airohq/kagent-remote-harness`.
+
 Build the helper and load its matching worker image into your local engine:
 
 ```sh
@@ -208,8 +213,9 @@ go install ./cmd/remote-harness
 docker build --target runner -t local/remote-harness:dev .
 ```
 
-Select the execution backend with `--runner`. The first backend, `container`,
-is the default. It uses the Moby Go client. Set `DOCKER_HOST` to select another
+Select the coding agent with `--harness` and its execution environment with
+`--sandbox` (formerly `--runner`). The first sandbox, `container`, is the default.
+It uses the Moby Go client. Set `DOCKER_HOST` to select another
 Engine API socket, such as a Podman service. With an engine managing named
 volumes, create/start/attach/remove, and the documented resource and security
 settings, the same helper can serve the worker. The engine receives turns on

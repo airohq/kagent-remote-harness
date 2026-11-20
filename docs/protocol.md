@@ -137,8 +137,9 @@ handler on its transport, and call `Close` to cancel active turns and release
 the backend. Both execution modes use the same v1 protocol.
 
 A transport can also launch `remote-harness supervise --socket PATH --name NAME`
-with a freshly generated `REMOTE_HARNESS_TOKEN`. An explicit `--runner TYPE`
-selects the execution backend. Omission uses the helper's default (`container`). Use a socket in a private
+with a freshly generated `REMOTE_HARNESS_TOKEN`. An explicit `--sandbox TYPE`
+selects the execution environment. The helper also accepts the original
+`--runner TYPE` spelling. Omission uses the helper's default (`container`). Use a socket in a private
 directory. The helper serves the same HTTP v1 protocol there. A successful
 authenticated info request confirms readiness and leaves the worker cold.
 Setting `REMOTE_HARNESS_PARENT_PIPE=1` asks the supervisor to stop when its
