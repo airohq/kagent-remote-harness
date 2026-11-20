@@ -5,7 +5,8 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY go.mod go.sum go.work ./
+COPY runner/go.mod runner/go.sum ./runner/
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY . .

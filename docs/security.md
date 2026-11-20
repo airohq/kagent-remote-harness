@@ -153,7 +153,9 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 
 ## On-demand workers
 
-The supervisor accepts protocol-v1 requests on a user-owned Unix socket in
+An embedded supervisor accepts requests through its host transport, which
+authenticates incoming callers before supplying the local bearer credential.
+The standalone supervisor accepts protocol-v1 requests on a user-owned Unix socket in
 a private directory and validates the bearer credential before starting a
 worker. Use a trusted helper, image and Engine API endpoint. Access to the
 engine grants control over the containers it manages.

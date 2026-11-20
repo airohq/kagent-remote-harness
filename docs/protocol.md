@@ -132,7 +132,11 @@ what untrusted input asks for ([Untrusted input](security.md#untrusted-input)).
 
 ## Local supervisor integration
 
-A transport can launch `remote-harness supervise --socket PATH --name NAME`
+A Go client can embed `runner/supervisor.New`, serve its authenticated HTTP
+handler on its transport, and call `Close` to cancel active turns and release
+the backend. Both execution modes use the same v1 protocol.
+
+A transport can also launch `remote-harness supervise --socket PATH --name NAME`
 with a freshly generated `REMOTE_HARNESS_TOKEN`. An explicit `--runner TYPE`
 selects the execution backend. Omission uses the helper's default (`container`). Use a socket in a private
 directory. The helper serves the same HTTP v1 protocol there. A successful

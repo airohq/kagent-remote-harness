@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 // Emit sends one event to the harness.

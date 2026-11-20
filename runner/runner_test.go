@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 const testToken = "0123456789abcdef0123456789abcdef"

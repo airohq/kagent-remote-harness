@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/airohq/kagent-remote-harness/runner"
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 // Backend owns the execution environment for a runner. RunTurn streams a

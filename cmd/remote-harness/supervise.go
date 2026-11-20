@@ -16,57 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/airohq/kagent-remote-harness/internal/supervisor"
 	"github.com/airohq/kagent-remote-harness/runner"
+	"github.com/airohq/kagent-remote-harness/runner/supervisor"
 	"github.com/airohq/kagent-remote-harness/wire"
 )
 
-type workerOptions struct {
-	harness, claudeMode, codexMode string
-	idle, timeout                  time.Duration
-}
-
-func (o *workerOptions) flags(fs *flag.FlagSet) {
-	fs.StringVar(&o.harness, "harness", "", "coding agent: claude or codex (required)")
-	fs.StringVar(&o.claudeMode, "claude-permission-mode", "", "Claude Code permission mode")
-	fs.StringVar(&o.codexMode, "codex-sandbox", "", "Codex sandbox mode")
-	fs.DurationVar(&o.idle, "idle-timeout", 5*time.Minute, "remove the container after this much idle time")
-	fs.DurationVar(&o.timeout, "turn-timeout", 30*time.Minute, "maximum time for one turn")
-}
-
-func (o workerOptions) adapter() (runner.Harness, error) {
-	if o.idle <= 0 || o.timeout <= 0 {
-		return nil, errors.New("idle-timeout and turn-timeout must be positive")
-	}
-	mode := o.claudeMode
-	if o.harness == "codex" {
-		mode = o.codexMode
-	}
-	return runner.NewHarness(o.harness, mode, nil)
-}
-
-// openBackend selects how turns run. Backend-specific startup belongs here.
-// the listener and the Tunnel use the same protocol for every implementation.
-func openBackend(kind, name, image string, opts workerOptions) (supervisor.Backend, error) {
-	switch kind {
-	case "container":
-		args := []string{"worker", "--harness", opts.harness,
-			"--codex-sandbox", opts.codexMode, "--claude-permission-mode", opts.claudeMode,
-			"--idle-timeout", opts.idle.String(), "--turn-timeout", opts.timeout.String()}
-		return supervisor.NewContainer(opts.harness, name, image, opts.idle, args)
-	default:
-		return nil, fmt.Errorf("unknown runner %q: available runners: container", kind)
-	}
-}
-
 func supervise(args []string, logger *slog.Logger) (err error) {
 	fs := flag.NewFlagSet("supervise", flag.ContinueOnError)
-	var opts workerOptions
-	opts.flags(fs)
-	kind := fs.String("runner", "container", "execution backend (available: container)")
+	var opts supervisor.Options
+	opts.BindFlags(fs)
 	name := fs.String("name", os.Getenv("REMOTE_HARNESS_NAME"), "persistent runner name (the container backend uses it for the volume)")
 	socket := fs.String("socket", os.Getenv("REMOTE_HARNESS_SOCKET"), "Unix socket to serve in a private directory")
-	image := fs.String("image", "ghcr.io/airohq/kagent-remote-harness/runner:latest", "locally available runner image with worker support")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -76,27 +36,15 @@ func supervise(args []string, logger *slog.Logger) (err error) {
 	if *socket == "" {
 		return errors.New("set --socket to a path in a private directory")
 	}
-	h, err := opts.adapter()
-	if err != nil {
-		return err
-	}
 	token, err := readToken("")
 	if err != nil {
 		return err
 	}
-	host, err := os.Hostname()
+	host, err := supervisor.New(*name, token, opts, logger)
 	if err != nil {
 		return err
 	}
-	backend, err := openBackend(*kind, *name, *image, opts)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, backend.Close()) }()
-	handler, err := runner.New(runner.Config{Harness: supervisor.OnBackend(h, backend), Token: token, Machine: host + "-" + *name, Workdir: ".", Env: []string{}, TurnTimeout: opts.timeout, Logger: logger})
-	if err != nil {
-		return err
-	}
+	defer func() { err = errors.Join(err, host.Close()) }()
 	listener, err := net.Listen("unix", *socket)
 	if err != nil {
 		return err
@@ -111,7 +59,7 @@ func supervise(args []string, logger *slog.Logger) (err error) {
 	if os.Getenv("REMOTE_HARNESS_PARENT_PIPE") == "1" {
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin); cancel() }()
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: host, ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
 	go func() { <-ctx.Done(); server.Close() }()
 	err = server.Serve(listener)
 	cancel()
@@ -125,12 +73,12 @@ func supervise(args []string, logger *slog.Logger) (err error) {
 // carry one turn at a time. EOF or idle expiry also cleans up orphaned workers.
 func worker(args []string, logger *slog.Logger) error {
 	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
-	var opts workerOptions
-	opts.flags(fs)
+	var opts supervisor.WorkerOptions
+	opts.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	h, err := opts.adapter()
+	h, err := opts.Adapter()
 	if err != nil {
 		return err
 	}
@@ -171,10 +119,10 @@ func worker(args []string, logger *slog.Logger) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(opts.idle + time.Minute):
+		case <-time.After(opts.IdleTimeout + time.Minute):
 			return nil
 		case turn := <-input:
-			turnCtx, stop := context.WithTimeout(ctx, opts.timeout)
+			turnCtx, stop := context.WithTimeout(ctx, opts.TurnTimeout)
 			err := h.Run(turnCtx, proc, turn, emit)
 			stop()
 			if err != nil {

@@ -216,7 +216,8 @@ settings, the same helper can serve the worker. The engine receives turns on
 the container's attached standard input and streams events back on standard
 output. The runner publishes no port.
 
-`airo agent serve` supplies the socket, token and volume name. To run the
+`airo agent serve` embeds the same Go supervisor and supplies its token and
+volume name. The standalone helper is useful for other transports. To run the
 supervisor directly, set `REMOTE_HARNESS_TOKEN` to a fresh token of at least
 32 characters, provide the coding agent's credential, and run:
 

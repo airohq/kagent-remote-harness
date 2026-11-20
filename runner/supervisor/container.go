@@ -20,7 +20,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/airohq/kagent-remote-harness/runner"
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 type engine interface {

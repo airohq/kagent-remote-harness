@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 // Harness runs one turn with a coding agent CLI.
