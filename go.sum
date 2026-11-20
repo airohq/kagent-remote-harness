@@ -32,8 +32,8 @@ github.com/a2aproject/a2a-go/v2 v2.8.0 h1:RmZBANuY8P9Pm1dfZ8gCY2yHAuVO7OnTFw8/kO
 github.com/a2aproject/a2a-go/v2 v2.8.0/go.mod h1:UrxIRm1qmHm1kDoEk5PXRHc+4WGw0OEnZFuavMOH+24=
 github.com/agent-substrate/env v0.0.11-0.20261007184417-0d359ea73823 h1:cC9zllwuxLAJnoe5UPh02mIpHdCZUWTFbG/vO0ZUYuc=
 github.com/agent-substrate/env v0.0.11-0.20261007184417-0d359ea73823/go.mod h1:RZ4ACmDqWQx7fgX9b1EaFJskeYTZh1Y7uZinDtp7U2o=
-github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120125959-5b7d9fdfc71b h1:kQ/p6onPdd3gVlcuPK7njK3GP+bu0Bz4/bM9kVp1f74=
-github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120125959-5b7d9fdfc71b/go.mod h1:3B4+oQ/8lBsvYl06kL2QRnTIb/UPay8+TS0/OYwoavo=
+github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120193721-d475058f5521 h1:rWqmrJ3+EoLV0GTvcGpksD1gx/ej6d/pIdC0RpB2Upg=
+github.com/airohq/kagent-remote-harness/runner v0.0.0-20261120193721-d475058f5521/go.mod h1:3B4+oQ/8lBsvYl06kL2QRnTIb/UPay8+TS0/OYwoavo=
 github.com/anthropics/anthropic-sdk-go v1.84.0 h1:mnAhggc5H5A98JYmhQELT+j4J89PYBFKnnSvUTNwNd8=
 github.com/anthropics/anthropic-sdk-go v1.84.0/go.mod h1:GThfYqPJoaQ/6pmibCI98Cr4y5su2FXMUHn3NrSSnIc=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
