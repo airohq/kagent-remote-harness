@@ -1,0 +1,207 @@
+// Package supervisor runs a harness in an on-demand container over the Engine
+// API. The attached stream carries turns and events. No port is published.
+package supervisor
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
+
+	"github.com/airohq/kagent-remote-harness/runner"
+	"github.com/airohq/kagent-remote-harness/wire"
+)
+
+type engine interface {
+	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerAttach(context.Context, string, client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+}
+
+// Container implements runner.Harness, keeping one worker warm between turns.
+type Container struct {
+	runner.Harness
+	Engine        engine
+	Image, Volume string
+	WorkerArgs    []string
+	Idle          time.Duration
+
+	mu     sync.Mutex
+	id     string
+	stream *client.ContainerAttachResult
+	output *io.PipeReader
+	events *bufio.Scanner
+	timer  *time.Timer
+}
+
+func (c *Container) start(ctx context.Context) error {
+	var env []string
+	keys := []string{"OPENAI_API_KEY"}
+	if c.Harness.Name() == "claude" {
+		keys = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+	}
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	pids := int64(512)
+	options := client.ContainerCreateOptions{
+		Name: c.Volume,
+		Config: &container.Config{
+			Image: c.Image, User: "10001:10001", Cmd: c.WorkerArgs, Env: env,
+			OpenStdin: true, StdinOnce: true,
+			AttachStdin: true, AttachStdout: true, AttachStderr: true,
+		},
+		HostConfig: &container.HostConfig{
+			AutoRemove:     true,
+			LogConfig:      container.LogConfig{Type: "none"},
+			ReadonlyRootfs: true,
+			CapDrop:        []string{"ALL"},
+			SecurityOpt:    []string{"no-new-privileges"},
+			Tmpfs:          map[string]string{"/tmp": "rw,nosuid,nodev,mode=1777"},
+			Mounts:         []mount.Mount{{Type: mount.TypeVolume, Source: c.Volume, Target: "/work"}},
+			Resources:      container.Resources{Memory: 4 << 30, NanoCPUs: 2e9, PidsLimit: &pids},
+		},
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Collect the new ID even if the request is canceled during creation;
+	// the remaining steps observe cancellation and remove the owned ID.
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	created, err := c.Engine.ContainerCreate(createCtx, options)
+	if err != nil {
+		return fmt.Errorf("create runner from %s (load the worker image into this engine first): %w", c.Image, err)
+	}
+	c.id = created.ID
+	attached, err := c.Engine.ContainerAttach(ctx, c.id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: true, Stderr: true})
+	if err != nil {
+		return err
+	}
+	c.stream = &attached
+
+	reader, writer := io.Pipe()
+	c.output = reader
+	c.events = bufio.NewScanner(reader)
+	c.events.Buffer(make([]byte, 64<<10), wire.MaxEventBytes+1)
+	go func() {
+		_, err := stdcopy.StdCopy(writer, os.Stderr, attached.Reader)
+		writer.CloseWithError(err)
+	}()
+	_, err = c.Engine.ContainerStart(ctx, c.id, client.ContainerStartOptions{})
+	return err
+}
+
+func (c *Container) Run(ctx context.Context, _ runner.Process, turn wire.TurnRequest, emit runner.Emit) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+	if c.stream == nil {
+		if c.id != "" {
+			if err := c.stop(); err != nil {
+				return err
+			}
+		}
+		if err := c.start(ctx); err != nil {
+			return errors.Join(err, c.stop())
+		}
+	}
+	// A canceled request must interrupt an in-flight read or write. Closing
+	// the attachment wakes both, then stop removes exactly the owned container.
+	stream := c.stream
+	finished := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() { stream.Close(); close(finished) })
+	err, terminal := c.exchange(turn, emit)
+	if !stopCancel() {
+		<-finished
+	}
+	if !terminal || ctx.Err() != nil {
+		return errors.Join(ctx.Err(), err, c.stop())
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(c.Idle, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.timer == timer {
+			if err := c.stop(); err != nil {
+				slog.Error("stop idle runner", "error", err)
+			}
+		}
+	})
+	c.timer = timer
+	return err
+}
+
+func (c *Container) exchange(turn wire.TurnRequest, emit runner.Emit) (error, bool) {
+	if err := json.NewEncoder(c.stream.Conn).Encode(turn); err != nil {
+		return err, false
+	}
+	for c.events.Scan() {
+		var event wire.Event
+		if err := json.Unmarshal(c.events.Bytes(), &event); err != nil {
+			return err, false
+		}
+		switch event.Type {
+		case wire.EventDone:
+			return nil, true
+		case wire.EventFailure:
+			return errors.New(event.Message), true
+		default:
+			emit(event)
+		}
+	}
+	if err := c.events.Err(); err != nil {
+		return err, false
+	}
+	return errors.New("runner image closed its worker stream before the turn finished; use an image with the worker command"), false
+}
+
+func (c *Container) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stop()
+}
+
+func (c *Container) stop() error {
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
+	if c.output != nil {
+		c.output.Close()
+		c.output = nil
+	}
+	if c.stream != nil {
+		c.stream.Close()
+		c.stream = nil
+	}
+	if c.id == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := c.Engine.ContainerRemove(ctx, c.id, client.ContainerRemoveOptions{Force: true})
+	if err != nil && !errdefs.IsNotFound(err) {
+		return fmt.Errorf("remove runner %s: %w", c.id, err)
+	}
+	c.id = ""
+	return nil
+}

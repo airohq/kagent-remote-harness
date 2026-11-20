@@ -150,3 +150,17 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 > adds no credential, so the sandbox can reach the API but not use it. Leave
 > the key out: the model runs on your machine with the coding agent's own
 > login.
+
+## On-demand workers
+
+The supervisor accepts protocol-v1 requests on a user-owned Unix socket in
+a private directory and validates the bearer credential before starting a
+worker. Use a trusted helper, image and Engine API endpoint. Access to the
+engine grants control over the containers it manages.
+
+Workers run as UID 10001 with a read-only root filesystem, a writable
+`/tmp`, dropped capabilities, no-new-privileges, CPU, memory and PID limits,
+and one named volume at `/work`. The supervisor passes only the selected
+provider's credentials. The engine attachment carries prompts and events,
+with container logging disabled. The worker retains the engine's normal
+outbound network access.
