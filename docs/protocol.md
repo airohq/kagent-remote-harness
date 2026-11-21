@@ -132,6 +132,10 @@ what untrusted input asks for ([Untrusted input](security.md#untrusted-input)).
 
 ## Local supervisor integration
 
+The first valid container turn pulls the published default worker tag and
+resolves its image ID once per supervisor lifetime. Other image references
+are resolved by the local engine when creating the container.
+
 A Go client can embed `runner/supervisor.New`, serve its authenticated HTTP
 handler on its transport, and call `Close` to cancel active turns and release
 the backend. Both execution modes use the same v1 protocol.

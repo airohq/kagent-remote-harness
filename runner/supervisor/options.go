@@ -44,13 +44,15 @@ type Options struct {
 	Image   string
 }
 
+const defaultWorkerImage = "ghcr.io/airohq/kagent-remote-harness/runner:latest"
+
 // BindFlags installs the runner settings and their defaults.
 func (o *Options) BindFlags(fs *flag.FlagSet) {
 	o.WorkerOptions.BindFlags(fs)
 	fs.BoolVar(&o.Verbose, "verbose", false, "show sandbox configuration, credential names, and turn event diagnostics")
 	fs.StringVar(&o.Backend, "sandbox", "container", "execution environment for the coding agent")
 	fs.StringVar(&o.Backend, "runner", "container", "legacy spelling of --sandbox")
-	fs.StringVar(&o.Image, "image", "ghcr.io/airohq/kagent-remote-harness/runner:latest", "locally available runner image with worker support")
+	fs.StringVar(&o.Image, "image", defaultWorkerImage, "worker image (the default is pulled on the first turn; overrides use a local image)")
 }
 
 // openBackend selects how turns run. Backend-specific startup belongs here.

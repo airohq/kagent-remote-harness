@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,9 +20,10 @@ import (
 )
 
 type memoryEngine struct {
-	created chan client.ContainerCreateOptions
-	removed chan string
-	started chan string
+	*client.Client // image operations use the test Engine API
+	created        chan client.ContainerCreateOptions
+	removed        chan string
+	started        chan string
 }
 
 func (e memoryEngine) Close() error { return nil }
@@ -65,7 +67,7 @@ func (e memoryEngine) ContainerRemove(_ context.Context, id string, _ client.Con
 }
 
 func TestOnDemandLifecycle(t *testing.T) {
-	e := memoryEngine{make(chan client.ContainerCreateOptions, 4), make(chan string, 4), make(chan string, 8)}
+	e := memoryEngine{created: make(chan client.ContainerCreateOptions, 4), removed: make(chan string, 4), started: make(chan string, 8)}
 	c := &Container{engine: e, harness: "codex", Volume: "work", Image: "worker", Idle: 100 * time.Millisecond}
 	t.Cleanup(func() {
 		if err := c.Close(); err != nil {
@@ -139,6 +141,59 @@ func TestOnDemandLifecycle(t *testing.T) {
 		t.Fatal("cancellation blocked")
 	}
 	awaitRemoval()
+}
+
+func TestDefaultImagePullAndPin(t *testing.T) {
+	var pulls, inspections atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/images/create"):
+			if r.URL.Query().Get("fromImage") != strings.TrimSuffix(defaultWorkerImage, ":latest") || r.URL.Query().Get("tag") != "latest" {
+				t.Errorf("unexpected pull: %s", r.URL)
+			}
+			if pulls.Add(1) == 1 {
+				fmt.Fprintln(w, `{"errorDetail":{"message":"registry unavailable"}}`)
+				return
+			}
+			fmt.Fprintln(w, `{"status":"Downloaded"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/images/"+defaultWorkerImage+"/json"):
+			fmt.Fprintf(w, `{"Id":"image-%d"}`, inspections.Add(1))
+		default:
+			t.Errorf("unexpected Engine request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	engine, err := client.New(client.WithHost("tcp://"+api.Listener.Addr().String()), client.WithAPIVersion("1.54"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	e := memoryEngine{Client: engine, created: make(chan client.ContainerCreateOptions, 2), removed: make(chan string, 2), started: make(chan string, 2)}
+	for run := 1; run <= 2; run++ {
+		c := &Container{engine: e, Image: defaultWorkerImage, Idle: time.Minute}
+		if run == 1 {
+			err := c.start(t.Context())
+			if err == nil || !strings.Contains(err.Error(), "registry unavailable") || len(e.created) != 0 || inspections.Load() != 0 {
+				t.Fatalf("failed pull should stop creation and allow retry: %v", err)
+			}
+		}
+		for range 2 {
+			if err := c.start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := (<-e.created).Config.Image; got != fmt.Sprintf("image-%d", run) {
+				t.Fatalf("run %d used image %s", run, got)
+			}
+			if err := c.stop(); err != nil {
+				t.Fatal(err)
+			}
+			<-e.removed
+		}
+	}
+	if pulls.Load() != 3 || inspections.Load() != 2 {
+		t.Fatalf("pulls %d inspections %d", pulls.Load(), inspections.Load())
+	}
 }
 
 func TestExplicitCodexCredential(t *testing.T) {

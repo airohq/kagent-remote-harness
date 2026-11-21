@@ -206,7 +206,13 @@ worker image. GitHub Actions publishes it to
 `ghcr.io/airohq/kagent-remote-harness/runner`. The `harness` target builds
 the in-cluster relay at `ghcr.io/airohq/kagent-remote-harness`.
 
-Build the helper and load its matching worker image into your local engine:
+On the first turn of each supervisor invocation, the container backend pulls
+the published default `ghcr.io/airohq/kagent-remote-harness/runner:latest`.
+It keeps the resulting image ID across idle worker restarts. A failed pull
+fails the turn and the next turn retries. Other image references use a
+worker already loaded in the selected engine.
+
+To use a local development build:
 
 ```sh
 go install ./cmd/remote-harness

@@ -25,6 +25,8 @@ import (
 
 type engine interface {
 	io.Closer
+	ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error)
+	ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerAttach(context.Context, string, client.ContainerAttachOptions) (client.ContainerAttachResult, error)
 	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
@@ -39,12 +41,14 @@ type Container struct {
 	WorkerArgs    []string
 	Idle          time.Duration
 
-	mu     sync.Mutex
-	id     string
-	stream *client.ContainerAttachResult
-	output *io.PipeReader
-	events *bufio.Scanner
-	timer  *time.Timer
+	mu sync.Mutex
+	// Pinned across idle worker removal for the lifetime of this supervisor.
+	pulledImageID string
+	id            string
+	stream        *client.ContainerAttachResult
+	output        *io.PipeReader
+	events        *bufio.Scanner
+	timer         *time.Timer
 }
 
 // NewContainer opens the configured Engine API client. The worker is created
@@ -85,13 +89,43 @@ func providerEnv(harness string) []string {
 	return env
 }
 
+// workerImage runs under mu. Only the published default tracks a registry tag.
+func (c *Container) workerImage(ctx context.Context) (string, error) {
+	if c.Image != defaultWorkerImage {
+		return c.Image, nil
+	}
+	if c.pulledImageID != "" {
+		return c.pulledImageID, nil
+	}
+	pull, err := c.engine.ImagePull(ctx, c.Image, client.ImagePullOptions{})
+	if err == nil {
+		err = pull.Wait(ctx) // consumes and closes the Engine's progress stream
+	}
+	if err != nil {
+		return "", fmt.Errorf("pull default worker image %s: %w", c.Image, err)
+	}
+	image, err := c.engine.ImageInspect(ctx, c.Image)
+	if err != nil {
+		return "", fmt.Errorf("inspect pulled worker image %s: %w", c.Image, err)
+	}
+	if image.ID == "" {
+		return "", fmt.Errorf("engine returned no image ID for %s", c.Image)
+	}
+	c.pulledImageID = image.ID
+	return image.ID, nil
+}
+
 func (c *Container) start(ctx context.Context) error {
+	image, err := c.workerImage(ctx)
+	if err != nil {
+		return err
+	}
 	env := providerEnv(c.harness)
 	pids := int64(512)
 	options := client.ContainerCreateOptions{
 		Name: c.Volume,
 		Config: &container.Config{
-			Image: c.Image, User: "10001:10001", Cmd: c.WorkerArgs, Env: env,
+			Image: image, User: "10001:10001", Cmd: c.WorkerArgs, Env: env,
 			OpenStdin: true, StdinOnce: true,
 			AttachStdin: true, AttachStdout: true, AttachStderr: true,
 		},
