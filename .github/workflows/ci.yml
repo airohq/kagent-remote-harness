@@ -21,14 +21,15 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go mod tidy -diff
+      - run: cd runner && go mod tidy -diff && go mod verify
       - run: go mod verify
       - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test -race ./...
+      - run: go vet ./... ./runner/...
+      - run: go test -race ./... ./runner/...
       # Known vulnerabilities that the code reaches, in the Go toolchain and
       # the modules. The runner, which runs on people's machines, fails CI on
       # any advisory until the dependency is updated.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./runner ./wire ./cmd/remote-harness
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./runner/... ./wire ./cmd/remote-harness
       # The kagent harness reaches advisories in kagent's dependencies, such as
       # the Ollama client, that have no fix. Report them without failing.
       - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./internal/... ./cmd/harness || true

@@ -129,3 +129,31 @@ what untrusted input asks for ([Untrusted input](security.md#untrusted-input)).
 | Usage (kagent's `ModelCall`: tokens, model, stop reason) | kagent shows the turn's cost and model |
 | Tool status and nesting (`ToolStatus`, `ParentToolID`) | kagent shows declined and unfinished tools, and a subagent's tools under it |
 | Trace context (`traceparent` from the turn's `TraceOrigin`) | The runner's spans join kagent's trace |
+
+## Local supervisor integration
+
+The first valid container turn pulls the published default worker tag and
+resolves its image ID once per supervisor lifetime. Other image references
+are resolved by the local engine when creating the container.
+
+A Go client can embed `runner/supervisor.New`, serve its authenticated HTTP
+handler on its transport, and call `Close` to cancel active turns and release
+the backend. Both execution modes use the same v1 protocol.
+
+Supervisor verbosity reports credential names and event types. Only fixed
+descriptions of recognized failures appear in verbose logs.
+
+A transport can also launch `remote-harness supervise --socket PATH --name NAME`
+with a freshly generated `REMOTE_HARNESS_TOKEN`. An explicit `--sandbox TYPE`
+selects the execution environment. The helper also accepts the original
+`--runner TYPE` spelling. Omission uses the helper's default (`container`). Use a socket in a private
+directory. The helper serves the same HTTP v1 protocol there. A successful
+authenticated info request confirms readiness and leaves the worker cold.
+Setting `REMOTE_HARNESS_PARENT_PIPE=1` asks the supervisor to stop when its
+parent closes standard input.
+
+Inside the worker container, the engine attachment carries one JSON
+`TurnRequest` per line on standard input and the v1 events on standard
+output. Only one turn is in flight. The supervisor supplies the machine
+identity on the HTTP session event. EOF, timeout or cancellation releases
+the worker. The supervisor never replays a turn after losing the stream.

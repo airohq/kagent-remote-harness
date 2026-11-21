@@ -125,7 +125,8 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 - **The coding agent never gets the runner's token.** The runner removes it
   from the environment it passes on.
 - **The runner logs no prompts or output** unless you pass `--log-content`.
-  Its log has turn IDs, timing and results.
+  Its log has turn IDs, timing and results. Supervisor verbosity adds credential
+  names, event types and fixed descriptions of recognized failures.
 - **The coding agent's output isn't filtered.** Whatever it prints, including
   a credential it can read, streams to kagent and is stored there. Pass only
   credentials you accept the agent seeing.
@@ -150,3 +151,23 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 > adds no credential, so the sandbox can reach the API but not use it. Leave
 > the key out: the model runs on your machine with the coding agent's own
 > login.
+
+## On-demand workers
+
+An embedded supervisor accepts requests through its host transport, which
+authenticates incoming callers before supplying the local bearer credential.
+The standalone supervisor accepts protocol-v1 requests on a user-owned Unix socket in
+a private directory and validates the bearer credential before starting a
+worker. Use a trusted helper, image and Engine API endpoint. Access to the
+engine grants control over the containers it manages.
+
+The default worker follows the published `latest` tag at the first turn and
+keeps that image ID until the supervisor exits. For a preverified worker,
+load it in the engine and select its digest with `--image`.
+
+Workers run as UID 10001 with a read-only root filesystem, a writable
+`/tmp`, dropped capabilities, no-new-privileges, CPU, memory and PID limits,
+and one named volume at `/work`. The supervisor passes only the selected
+provider's credentials. The engine attachment carries prompts and events,
+with container logging disabled. The worker retains the engine's normal
+outbound network access.

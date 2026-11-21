@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 const testToken = "0123456789abcdef0123456789abcdef"
@@ -297,5 +298,30 @@ func TestCutShortKeepsEventsUnderTheLimit(t *testing.T) {
 	}
 	if s, _ := ev.Result.(string); !strings.HasSuffix(s, cutNotice) {
 		t.Error("the result doesn't say it was cut short")
+	}
+}
+
+func TestCodexVerboseFailure(t *testing.T) {
+	dir := t.TempDir()
+	body := `#!/bin/sh
+cat >/dev/null
+echo '{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Missing bearer token private-provider-detail"}}'
+echo "opaque transport error" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(body), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var logs strings.Builder
+	srv := newTestRunner(t, Config{Harness: Codex{Sandbox: "read-only"}, Verbose: true, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	got := events(t, post(t, t.Context(), srv.URL, testToken, wire.TurnRequest{Prompt: "private-prompt"}))
+	if len(got) != 1 || got[0].Type != wire.EventFailure || !strings.Contains(got[0].Message, "401") {
+		t.Fatalf("expected the provider failure, got %v", got)
+	}
+	srv.Close()
+	log := logs.String()
+	if !strings.Contains(log, "provider received no bearer token") || !strings.Contains(log, "type=failure") || strings.Contains(log, "private-") {
+		t.Fatalf("unexpected verbose log: %s", log)
 	}
 }

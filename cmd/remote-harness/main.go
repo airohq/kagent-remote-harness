@@ -33,6 +33,7 @@ const usage = `remote-harness runs a kagent agent's turns on this machine.
 
 Usage:
   remote-harness serve --harness <claude|codex> [flags]
+  remote-harness supervise --name NAME --harness <claude|codex> [flags]
   remote-harness version
 
 Run "remote-harness serve -h" for its flags.
@@ -44,9 +45,16 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
-	case "serve":
+	case "serve", "supervise", "worker":
 		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-		if err := serve(os.Args[2:], logger); err != nil {
+		run := serve
+		if os.Args[1] == "supervise" {
+			run = supervise
+		}
+		if os.Args[1] == "worker" {
+			run = worker
+		}
+		if err := run(os.Args[2:], logger); err != nil {
 			logger.Error("remote-harness stopped", "error", err)
 			os.Exit(1)
 		}

@@ -19,7 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 const (
@@ -35,6 +35,8 @@ const (
 
 // Config configures a Runner.
 type Config struct {
+	// Verbose reports event types and recognized failure diagnostics without content.
+	Verbose bool
 	// Harness runs the coding agent.
 	Harness Harness
 	// Token is the bearer token every request must carry.
@@ -172,6 +174,16 @@ func (r *Runner) turn(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", wire.ContentType)
 	w.WriteHeader(http.StatusOK)
 	emit := newEmitter(w, r.cfg.Machine, logger, r.cfg.LogContent)
+	if r.cfg.Verbose {
+		send := emit
+		emit = func(ev wire.Event) {
+			switch ev.Type {
+			case wire.EventSession, wire.EventText, wire.EventToolCall, wire.EventToolResult, wire.EventDone, wire.EventFailure:
+				logger.Info("turn event", "type", ev.Type)
+			}
+			send(ev)
+		}
+	}
 
 	ctx := req.Context()
 	if r.cfg.TurnTimeout > 0 {
@@ -195,10 +207,35 @@ func (r *Runner) turn(w http.ResponseWriter, req *http.Request) {
 		emit(wire.Event{Type: wire.EventFailure, Message: err.Error()})
 		// The error can quote the coding agent's output.
 		attrs := []any{"duration", time.Since(started).Round(time.Millisecond)}
+		if r.cfg.Verbose {
+			attrs = append(attrs, "diagnostic", failureDiagnostic(err))
+		}
 		if r.cfg.LogContent {
 			attrs = append(attrs, "error", err)
 		}
 		logger.Warn("turn failed", attrs...)
+	}
+}
+
+// The worker can quote prompts, commands and credentials in errors. Only
+// fixed descriptions derived from known diagnostics belong in verbose logs.
+func failureDiagnostic(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "missing bearer"):
+		return "provider received no bearer token (401; check the serving process credentials)"
+	case strings.Contains(msg, "401 unauthorized"), strings.Contains(msg, "invalid_api_key"):
+		return "provider rejected authentication (401)"
+	case strings.Contains(msg, "403 forbidden"):
+		return "provider denied access (403)"
+	case strings.Contains(msg, "429 too many requests"), strings.Contains(msg, "insufficient_quota"):
+		return "provider rate limit or quota exceeded (429)"
+	case strings.Contains(msg, "failed to connect to responses websocket"):
+		return "Codex could not connect to the Responses WebSocket"
+	case strings.Contains(msg, "create runner from"):
+		return "container creation failed (check the local image and engine)"
+	default:
+		return "worker execution failed"
 	}
 }
 

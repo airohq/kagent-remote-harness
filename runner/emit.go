@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 // Emit sends one event to the harness.
@@ -21,10 +21,7 @@ func newEmitter(w http.ResponseWriter, machine string, logger *slog.Logger, logC
 		if ev.Type == wire.EventSession {
 			ev.Machine = machine
 		}
-		line, err := json.Marshal(ev)
-		if err == nil && len(line) > wire.MaxEventBytes {
-			line, err = json.Marshal(cutShort(ev))
-		}
+		line, err := EncodeEvent(ev)
 		if err != nil {
 			logger.Warn("encode event", "type", ev.Type, "error", err)
 			return
@@ -73,4 +70,13 @@ func truncate(s string, n int) string {
 		cut--
 	}
 	return s[:cut] + cutNotice
+}
+
+// EncodeEvent encodes one bounded event for either HTTP or the worker stream.
+func EncodeEvent(ev wire.Event) ([]byte, error) {
+	line, err := json.Marshal(ev)
+	if err == nil && len(line) > wire.MaxEventBytes {
+		return json.Marshal(cutShort(ev))
+	}
+	return line, err
 }

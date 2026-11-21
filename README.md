@@ -193,6 +193,63 @@ Configure and run the remote harness:
    The runner's log shows the turn, and the answer streams back. You can
    also chat with the agent in the kagent UI (`kagent dashboard`).
 
+## Start containers on demand
+
+A local `remote-harness supervise` serves the same authenticated runner
+protocol on a Unix socket. The first valid turn starts a worker in a
+container. A warm worker serves one turn at a time. After five idle minutes
+the supervisor removes the container. The named volume at `/work` keeps the
+workspace and coding agent's sessions across starts.
+
+The Dockerfile's `runner` target installs both Claude Code and Codex in one
+worker image. GitHub Actions publishes it to
+`ghcr.io/airohq/kagent-remote-harness/runner`. The `harness` target builds
+the in-cluster relay at `ghcr.io/airohq/kagent-remote-harness`.
+
+On the first turn of each supervisor invocation, the container backend pulls
+the published default `ghcr.io/airohq/kagent-remote-harness/runner:latest`.
+It keeps the resulting image ID across idle worker restarts. A failed pull
+fails the turn and the next turn retries. Other image references use a
+worker already loaded in the selected engine.
+
+To use a local development build:
+
+```sh
+go install ./cmd/remote-harness
+docker build --target runner -t local/remote-harness:dev .
+```
+
+Select the coding agent with `--harness` and its execution environment with
+`--sandbox` (formerly `--runner`). The first sandbox, `container`, is the default.
+It uses the Moby Go client. Set `DOCKER_HOST` to select another
+Engine API socket, such as a Podman service. With an engine managing named
+volumes, create/start/attach/remove, and the documented resource and security
+settings, the same helper can serve the worker. The engine receives turns on
+the container's attached standard input and streams events back on standard
+output. The runner publishes no port.
+
+`airo agent serve` embeds the same Go supervisor and supplies its token and
+volume name. The standalone helper is useful for other transports. To run the
+supervisor directly, set `REMOTE_HARNESS_TOKEN` to a fresh token of at least
+32 characters, provide the coding agent's credential, and run:
+
+```sh
+dir=$(mktemp -d)
+remote-harness supervise --name reviewer --socket "$dir/runner.sock" \
+  --image local/remote-harness:dev --harness codex --codex-sandbox workspace-write
+```
+
+`--idle-timeout` sets how long to keep a warm worker. `--turn-timeout` bounds
+one turn (default 30 minutes). Use a separate volume name for each runner.
+Supervisors accept `--verbose` to report sandbox settings, credential names,
+event types and recognized failures. Credential values and event contents stay
+out of verbose logs. The container passes `CODEX_API_KEY` to headless Codex,
+using the host’s `OPENAI_API_KEY` as a fallback.
+
+The engine receives the selected coding agent's provider credentials.
+Canceling a running turn releases the container. Use the same name and engine
+to resume from its volume.
+
 ## Harnesses
 
 **The runner runs one coding agent CLI per turn, in `--workdir`, with the
@@ -203,7 +260,7 @@ runs on your machine:
 | `--harness` | New conversation | Later turns | Signs in with |
 | --- | --- | --- | --- |
 | `claude` | `claude -p --output-format stream-json --verbose --permission-mode <mode> [--model <model>] [--append-system-prompt <instructions>] [<harness args>]` | The same, plus `--resume <session>` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
-| `codex` | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] --sandbox <sandbox> [<harness args>] -`, with the instructions before the prompt | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] -c sandbox_mode="<sandbox>" [<harness args>] resume <thread> -` | `OPENAI_API_KEY`, or your Codex login |
+| `codex` | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] --sandbox <sandbox> [<harness args>] -`, with the instructions before the prompt | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] -c sandbox_mode="<sandbox>" [<harness args>] resume <thread> -` | `CODEX_API_KEY`, or your Codex login. The on-demand container also accepts the host’s `OPENAI_API_KEY`. |
 
 - **`<model>` comes from the Agent's `modelConfig`**, and is left out when
   the Agent has none, so the CLI uses its own default.
