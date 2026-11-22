@@ -33,7 +33,7 @@ func New(name, token string, opts Options, logger *slog.Logger) (*Supervisor, er
 	if err != nil {
 		return nil, err
 	}
-	b, err := openBackend(opts.Backend, name, opts.Image, opts.WorkerOptions)
+	b, err := openBackend(name, opts)
 	if err != nil {
 		return nil, err
 	}

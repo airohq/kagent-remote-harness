@@ -171,3 +171,5 @@ and one named volume at `/work`. The supervisor passes only the selected
 provider's credentials. The engine attachment carries prompts and events,
 with container logging disabled. The worker retains the engine's normal
 outbound network access.
+
+An embedding application can opt a trusted Codex worker into a separate credential volume. Its writable `auth` directory contains subscription credentials and refresh locks. The worker can read and refresh those credentials. Working copies, configuration and local conversation history stay on the workspace volume. Access to the credential volume should be limited to trusted workers and engine administrators.

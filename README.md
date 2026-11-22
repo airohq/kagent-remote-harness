@@ -246,6 +246,8 @@ event types and recognized failures. Credential values and event contents stay
 out of verbose logs. The container passes `CODEX_API_KEY` to headless Codex,
 using the host’s `OPENAI_API_KEY` as a fallback.
 
+Programs embedding the supervisor can set `Options.CodexLoginVolume` to a dedicated engine volume labelled with `supervisor.CodexLoginLabel` and the volume name. A Codex worker shares the login and its refresh locks from the volume’s `auth` directory. The host chooses the workspace volume and owns its cleanup independently.
+
 The engine receives the selected coding agent's provider credentials.
 Canceling a running turn releases the container. Use the same name and engine
 to resume from its volume.

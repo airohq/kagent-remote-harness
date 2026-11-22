@@ -25,6 +25,7 @@ import (
 
 type engine interface {
 	io.Closer
+	VolumeInspect(context.Context, string, client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error)
 	ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
@@ -35,11 +36,12 @@ type engine interface {
 
 // Container keeps one worker warm between turns over the Engine API.
 type Container struct {
-	harness       string
-	engine        engine
-	Image, Volume string
-	WorkerArgs    []string
-	Idle          time.Duration
+	harness          string
+	codexLoginVolume string
+	engine           engine
+	Image, Volume    string
+	WorkerArgs       []string
+	Idle             time.Duration
 
 	mu sync.Mutex
 	// Pinned across idle worker removal for the lifetime of this supervisor.
@@ -115,6 +117,47 @@ func (c *Container) workerImage(ctx context.Context) (string, error) {
 	return image.ID, nil
 }
 
+// CodexLoginLabel identifies an opt-in credential volume. Its value is the volume name.
+const CodexLoginLabel = "remote-harness.dev/codex-login"
+
+const codexLoginEntrypoint = `set -eu
+test -s /run/codex-login/auth.json || { echo 'Codex subscription login missing; sign in again' >&2; exit 1; }
+mkdir -p "$CODEX_HOME"
+for file in auth.json auth.lock; do
+	link="$CODEX_HOME/$file"
+	target="/run/codex-login/$file"
+	if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then continue; fi
+	if [ "$file" = auth.lock ] && [ -f "$link" ] && [ ! -L "$link" ]; then rm "$link"; fi
+	if [ -e "$link" ] || [ -L "$link" ]; then echo "Move the existing credential at $link before using the shared Codex login" >&2; exit 1; fi
+	ln -s "$target" "$link"
+done
+exec remote-harness "$@"`
+
+func (c *Container) useCodexLogin(ctx context.Context, opts *client.ContainerCreateOptions) error {
+	name := c.codexLoginVolume
+	if name == "" || c.harness != "codex" {
+		return nil
+	}
+	v, err := c.engine.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if errdefs.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Codex credential volume: %w", err)
+	}
+	if v.Volume.Labels[CodexLoginLabel] != name {
+		return fmt.Errorf("volume %s is not a Codex credential volume", name)
+	}
+	// Codex refreshes credentials by atomic replacement and coordinates writes
+	// with file locks. Share only the dedicated credential directory.
+	opts.HostConfig.Mounts = append(opts.HostConfig.Mounts, mount.Mount{
+		Type: mount.TypeVolume, Source: name, Target: "/run/codex-login",
+		VolumeOptions: &mount.VolumeOptions{NoCopy: true, Subpath: "auth"},
+	})
+	opts.Config.Entrypoint = []string{"/bin/sh", "-ec", codexLoginEntrypoint, "codex-login"}
+	return nil
+}
+
 func (c *Container) start(ctx context.Context) error {
 	image, err := c.workerImage(ctx)
 	if err != nil {
@@ -140,6 +183,10 @@ func (c *Container) start(ctx context.Context) error {
 			Resources:      container.Resources{Memory: 4 << 30, NanoCPUs: 2e9, PidsLimit: &pids},
 		},
 	}
+	if err := c.useCodexLogin(ctx, &options); err != nil {
+		return err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
