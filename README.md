@@ -246,6 +246,14 @@ event types and recognized failures. Credential values and event contents stay
 out of verbose logs. The container passes `CODEX_API_KEY` to headless Codex,
 using the host’s `OPENAI_API_KEY` as a fallback.
 
+Hosts embedding the supervisor can call `Options.PrepareCredentials` before
+accepting turns. The container sandbox uses explicit environment credentials
+first. For its shipped image it checks the selected provider’s saved login.
+If needed, a terminal can complete native Codex device sign-in or Claude
+Code subscription sign-in. Supply a nil terminal for unattended operation.
+Each provider has a dedicated engine volume, separate from workspace storage.
+Custom images supply their own credential setup.
+
 The engine receives the selected coding agent's provider credentials.
 Canceling a running turn releases the container. Use the same name and engine
 to resume from its volume.

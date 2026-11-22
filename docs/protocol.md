@@ -157,3 +157,5 @@ Inside the worker container, the engine attachment carries one JSON
 output. Only one turn is in flight. The supervisor supplies the machine
 identity on the HTTP session event. EOF, timeout or cancellation releases
 the worker. The supervisor never replays a turn after losing the stream.
+
+An embedding application may provide a local Codex or Claude Code login volume independently of a worker’s workspace. Selection, rotation and retention of the login happen on the container engine. The turn and tunnel protocols carry no provider credentials during sign-in.

@@ -42,6 +42,10 @@ type Options struct {
 	Verbose bool
 	Backend string
 	Image   string
+	// CodexLoginVolume optionally names an existing engine volume labelled with
+	// CodexLoginLabel. Its auth directory holds the file-backed Codex login.
+	CodexLoginVolume string
+	loginVolume      string
 }
 
 const defaultWorkerImage = "ghcr.io/airohq/kagent-remote-harness/runner:latest"
@@ -57,14 +61,23 @@ func (o *Options) BindFlags(fs *flag.FlagSet) {
 
 // openBackend selects how turns run. Backend-specific startup belongs here.
 // The listener and the Tunnel use the same protocol for every implementation.
-func openBackend(kind, name, image string, opts WorkerOptions) (Backend, error) {
-	switch kind {
+func openBackend(name string, opts Options) (Backend, error) {
+	switch opts.Backend {
 	case "container":
 		args := []string{"worker", "--harness", opts.Harness,
 			"--codex-sandbox", opts.CodexSandbox, "--claude-permission-mode", opts.ClaudePermissionMode,
 			"--idle-timeout", opts.IdleTimeout.String(), "--turn-timeout", opts.TurnTimeout.String()}
-		return NewContainer(opts.Harness, name, image, opts.IdleTimeout, args)
+		c, err := NewContainer(opts.Harness, name, opts.Image, opts.IdleTimeout, args)
+		if err != nil {
+			return nil, err
+		}
+		c.loginVolume = opts.loginVolume
+		if c.loginVolume == "" && opts.Harness == "codex" {
+			c.loginVolume = opts.CodexLoginVolume
+			c.optionalLogin = true
+		}
+		return c, nil
 	default:
-		return nil, fmt.Errorf("unknown sandbox %q: available sandboxes: container", kind)
+		return nil, fmt.Errorf("unknown sandbox %q: available sandboxes: container", opts.Backend)
 	}
 }

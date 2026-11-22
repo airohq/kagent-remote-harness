@@ -171,3 +171,5 @@ and one named volume at `/work`. The supervisor passes only the selected
 provider's credentials. The engine attachment carries prompts and events,
 with container logging disabled. The worker retains the engine's normal
 outbound network access.
+
+Interactive sign-in runs the native provider CLI in a digest-pinned helper before accepting turns. Input and output stay on the local Engine connection, and helper logging is disabled. An embedding application can opt a trusted Codex or Claude Code worker into a separate credential volume. Its writable `auth` directory contains subscription credentials and refresh locks. The worker can read and refresh those credentials. Working copies, configuration and local conversation history stay on the workspace volume. Access to the credential volume should be limited to trusted workers and engine administrators.

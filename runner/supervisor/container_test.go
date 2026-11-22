@@ -16,6 +16,9 @@ import (
 
 	"github.com/airohq/kagent-remote-harness/runner"
 	"github.com/airohq/kagent-remote-harness/runner/wire"
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 )
 
@@ -206,5 +209,52 @@ func TestExplicitCodexCredential(t *testing.T) {
 	}
 	if got := providerEnv("claude"); len(got) != 0 {
 		t.Error("Claude received an unrelated credential")
+	}
+}
+
+type loginVolumeEngine struct {
+	memoryEngine
+	labels map[string]string
+}
+
+func (e loginVolumeEngine) VolumeInspect(_ context.Context, _ string, _ client.VolumeInspectOptions) (client.VolumeInspectResult, error) {
+	if e.labels == nil {
+		return client.VolumeInspectResult{}, errdefs.ErrNotFound
+	}
+	return client.VolumeInspectResult{Volume: volume.Volume{Labels: e.labels}}, nil
+}
+
+func TestProviderLoginMount(t *testing.T) {
+	const name = "login-test"
+	for _, tt := range []struct {
+		harness          string
+		label            string
+		mounted, wantErr bool
+	}{
+		{"codex", name, true, false},
+		{"claude", name, true, false},
+		{"codex", "foreign", false, true},
+		{"codex", "", false, true},
+	} {
+		e := loginVolumeEngine{}
+		if tt.label != "" {
+			e.labels = map[string]string{loginLabel(tt.harness): tt.label}
+		}
+		c := Container{harness: tt.harness, loginVolume: name, engine: e}
+		opts := client.ContainerCreateOptions{Config: &container.Config{}, HostConfig: &container.HostConfig{}}
+		err := c.useLogin(t.Context(), &opts)
+		if (err != nil) != tt.wantErr || (len(opts.HostConfig.Mounts) != 0) != tt.mounted {
+			t.Fatalf("%+v: mounts=%v, err=%v", tt, opts.HostConfig.Mounts, err)
+		}
+		if tt.mounted {
+			m := opts.HostConfig.Mounts[0]
+			subpath, target := "auth", "/run/codex-login"
+			if tt.harness == "claude" {
+				subpath, target = "auth/.credentials.json", "/work/state/claude/.credentials.json"
+			}
+			if m.Source != name || m.VolumeOptions.Subpath != subpath || m.Target != target {
+				t.Fatalf("unexpected login mount: %+v", m)
+			}
+		}
 	}
 }
