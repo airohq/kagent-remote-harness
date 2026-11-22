@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/airohq/kagent-remote-harness/wire"
+	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
 
 func TestSandboxSelection(t *testing.T) {
