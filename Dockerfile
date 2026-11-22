@@ -6,11 +6,10 @@ ARG TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
 # Build the two modules from this checkout, including unpublished runner fixes.
-ENV GOWORK=off
-COPY go.mod go.sum ./
+COPY go.work go.work.sum go.mod go.sum ./
 COPY runner/go.mod runner/go.sum ./runner/
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod edit -replace=github.com/airohq/kagent-remote-harness/runner=./runner && go mod download
+    go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY wire/ wire/
