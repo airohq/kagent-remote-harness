@@ -45,6 +45,7 @@ type Options struct {
 	// CodexLoginVolume optionally names an existing engine volume labelled with
 	// CodexLoginLabel. Its auth directory holds the file-backed Codex login.
 	CodexLoginVolume string
+	loginVolume      string
 }
 
 const defaultWorkerImage = "ghcr.io/airohq/kagent-remote-harness/runner:latest"
@@ -70,7 +71,11 @@ func openBackend(name string, opts Options) (Backend, error) {
 		if err != nil {
 			return nil, err
 		}
-		c.codexLoginVolume = opts.CodexLoginVolume
+		c.loginVolume = opts.loginVolume
+		if c.loginVolume == "" && opts.Harness == "codex" {
+			c.loginVolume = opts.CodexLoginVolume
+			c.optionalLogin = true
+		}
 		return c, nil
 	default:
 		return nil, fmt.Errorf("unknown sandbox %q: available sandboxes: container", opts.Backend)

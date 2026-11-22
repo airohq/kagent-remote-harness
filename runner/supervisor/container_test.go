@@ -224,7 +224,7 @@ func (e loginVolumeEngine) VolumeInspect(_ context.Context, _ string, _ client.V
 	return client.VolumeInspectResult{Volume: volume.Volume{Labels: e.labels}}, nil
 }
 
-func TestCodexLoginMount(t *testing.T) {
+func TestProviderLoginMount(t *testing.T) {
 	const name = "login-test"
 	for _, tt := range []struct {
 		harness          string
@@ -232,23 +232,27 @@ func TestCodexLoginMount(t *testing.T) {
 		mounted, wantErr bool
 	}{
 		{"codex", name, true, false},
-		{"claude", name, false, false},
+		{"claude", name, true, false},
 		{"codex", "foreign", false, true},
-		{"codex", "", false, false},
+		{"codex", "", false, true},
 	} {
 		e := loginVolumeEngine{}
 		if tt.label != "" {
-			e.labels = map[string]string{CodexLoginLabel: tt.label}
+			e.labels = map[string]string{loginLabel(tt.harness): tt.label}
 		}
-		c := Container{harness: tt.harness, codexLoginVolume: name, engine: e}
+		c := Container{harness: tt.harness, loginVolume: name, engine: e}
 		opts := client.ContainerCreateOptions{Config: &container.Config{}, HostConfig: &container.HostConfig{}}
-		err := c.useCodexLogin(t.Context(), &opts)
+		err := c.useLogin(t.Context(), &opts)
 		if (err != nil) != tt.wantErr || (len(opts.HostConfig.Mounts) != 0) != tt.mounted {
 			t.Fatalf("%+v: mounts=%v, err=%v", tt, opts.HostConfig.Mounts, err)
 		}
 		if tt.mounted {
 			m := opts.HostConfig.Mounts[0]
-			if m.Source != name || m.VolumeOptions.Subpath != "auth" || m.Target != "/run/codex-login" || len(opts.Config.Entrypoint) == 0 {
+			subpath, target := "auth", "/run/codex-login"
+			if tt.harness == "claude" {
+				subpath, target = "auth/.credentials.json", "/work/state/claude/.credentials.json"
+			}
+			if m.Source != name || m.VolumeOptions.Subpath != subpath || m.Target != target {
 				t.Fatalf("unexpected login mount: %+v", m)
 			}
 		}

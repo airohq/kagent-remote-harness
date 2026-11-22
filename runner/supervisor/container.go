@@ -28,6 +28,7 @@ type engine interface {
 	VolumeInspect(context.Context, string, client.VolumeInspectOptions) (client.VolumeInspectResult, error)
 	ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error)
 	ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ContainerWait(context.Context, string, client.ContainerWaitOptions) client.ContainerWaitResult
 	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerAttach(context.Context, string, client.ContainerAttachOptions) (client.ContainerAttachResult, error)
 	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
@@ -36,14 +37,16 @@ type engine interface {
 
 // Container keeps one worker warm between turns over the Engine API.
 type Container struct {
-	harness          string
-	codexLoginVolume string
-	engine           engine
-	Image, Volume    string
-	WorkerArgs       []string
-	Idle             time.Duration
+	optionalLogin bool
+	harness       string
+	loginVolume   string
+	engine        engine
+	Image, Volume string
+	WorkerArgs    []string
+	Idle          time.Duration
 
-	mu sync.Mutex
+	mu                   sync.Mutex
+	claudeWorkspaceReady bool
 	// Pinned across idle worker removal for the lifetime of this supervisor.
 	pulledImageID string
 	id            string
@@ -120,6 +123,8 @@ func (c *Container) workerImage(ctx context.Context) (string, error) {
 // CodexLoginLabel identifies an opt-in credential volume. Its value is the volume name.
 const CodexLoginLabel = "remote-harness.dev/codex-login"
 
+func loginLabel(harness string) string { return "remote-harness.dev/" + harness + "-login" }
+
 const codexLoginEntrypoint = `set -eu
 test -s /run/codex-login/auth.json || { echo 'Codex subscription login missing; sign in again' >&2; exit 1; }
 mkdir -p "$CODEX_HOME"
@@ -133,28 +138,36 @@ for file in auth.json auth.lock; do
 done
 exec remote-harness "$@"`
 
-func (c *Container) useCodexLogin(ctx context.Context, opts *client.ContainerCreateOptions) error {
-	name := c.codexLoginVolume
-	if name == "" || c.harness != "codex" {
+func (c *Container) useLogin(ctx context.Context, opts *client.ContainerCreateOptions) error {
+	name := c.loginVolume
+	if name == "" {
 		return nil
 	}
 	v, err := c.engine.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
-	if errdefs.IsNotFound(err) {
+	if errdefs.IsNotFound(err) && c.optionalLogin {
 		return nil
 	}
+	if errdefs.IsNotFound(err) {
+		return fmt.Errorf("credential volume %s disappeared; restart the server to sign in", name)
+	}
 	if err != nil {
-		return fmt.Errorf("inspect Codex credential volume: %w", err)
+		return fmt.Errorf("inspect %s credential volume: %w", c.harness, err)
 	}
-	if v.Volume.Labels[CodexLoginLabel] != name {
-		return fmt.Errorf("volume %s is not a Codex credential volume", name)
+	if v.Volume.Labels[loginLabel(c.harness)] != name {
+		return fmt.Errorf("volume %s is not a %s credential volume", name, c.harness)
 	}
-	// Codex refreshes credentials by atomic replacement and coordinates writes
-	// with file locks. Share only the dedicated credential directory.
-	opts.HostConfig.Mounts = append(opts.HostConfig.Mounts, mount.Mount{
-		Type: mount.TypeVolume, Source: name, Target: "/run/codex-login",
+	credential := mount.Mount{Type: mount.TypeVolume, Source: name, Target: "/run/codex-login",
 		VolumeOptions: &mount.VolumeOptions{NoCopy: true, Subpath: "auth"},
-	})
-	opts.Config.Entrypoint = []string{"/bin/sh", "-ec", codexLoginEntrypoint, "codex-login"}
+	}
+	if c.harness == "claude" {
+		// Claude replaces a symlink during refresh. A direct file mount keeps
+		// refreshes on the credential volume and everything else in /work.
+		credential.Target = "/work/state/claude/.credentials.json"
+		credential.VolumeOptions.Subpath = "auth/.credentials.json"
+	} else {
+		opts.Config.Entrypoint = []string{"/bin/sh", "-ec", codexLoginEntrypoint, "codex-login"}
+	}
+	opts.HostConfig.Mounts = append(opts.HostConfig.Mounts, credential)
 	return nil
 }
 
@@ -183,7 +196,26 @@ func (c *Container) start(ctx context.Context) error {
 			Resources:      container.Resources{Memory: 4 << 30, NanoCPUs: 2e9, PidsLimit: &pids},
 		},
 	}
-	if err := c.useCodexLogin(ctx, &options); err != nil {
+	if c.harness == "claude" && c.loginVolume != "" && !c.claudeWorkspaceReady {
+		// The Engine would otherwise create the mount's parent owned by root
+		// and Claude could not lock or refresh its login. Existing workspaces
+		// retain their directory, permissions and session history.
+		host := *options.HostConfig
+		request := client.ContainerCreateOptions{
+			Config: &container.Config{Image: image, User: "10001:10001", Entrypoint: []string{"/bin/sh", "-ec"},
+				Cmd: []string{`mkdir -p "$CLAUDE_CONFIG_DIR"`}, AttachStderr: true},
+			HostConfig: &host,
+		}
+		status, err := runSetup(ctx, c.engine, request, nil, os.Stderr)
+		if err != nil {
+			return fmt.Errorf("prepare Claude workspace: %w", err)
+		}
+		if status != 0 {
+			return fmt.Errorf("prepare Claude workspace exited with status %d", status)
+		}
+		c.claudeWorkspaceReady = true
+	}
+	if err := c.useLogin(ctx, &options); err != nil {
 		return err
 	}
 
