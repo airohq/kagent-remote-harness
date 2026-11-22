@@ -33,6 +33,9 @@ a conversation to its machine (see [Sessions](#sessions)).
 
 ### `POST /v1/turn`
 
+Native coding-agent arguments are local worker settings. They apply across
+turns, including when resuming a conversation.
+
 ```json
 {
   "prompt": "Fix the failing test in pkg/foo.",

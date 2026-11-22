@@ -279,7 +279,10 @@ runs on your machine:
   `--codex-sandbox`, because nothing can ask you. See
   [Approvals](docs/security.md#approvals).
 - **`<harness args>` are your own flags**, from `--harness-arg`, such as
-  `--harness-arg=--disallowedTools=Bash` to take a tool away.
+  `--harness-arg=--disallowedTools=Bash` to take a tool away. The supervisor
+  accepts this repeatable flag too. Each occurrence carries one literal argument
+  into the worker on fresh and resumed turns. A native model selection overrides
+  the model from the turn. Container workers must support `--harness-arg`.
 - **The coding agent gets the runner's environment without the runner's
   token**, so a turn can't read the token.
 

@@ -154,6 +154,9 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 
 ## On-demand workers
 
+The person starting the supervisor controls native coding-agent arguments.
+The worker passes them directly to the executable as separate arguments.
+
 An embedded supervisor accepts requests through its host transport, which
 authenticates incoming callers before supplying the local bearer credential.
 The standalone supervisor accepts protocol-v1 requests on a user-owned Unix socket in
