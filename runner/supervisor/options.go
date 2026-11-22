@@ -13,6 +13,7 @@ import (
 type WorkerOptions struct {
 	Harness, ClaudePermissionMode, CodexSandbox string
 	IdleTimeout, TurnTimeout                    time.Duration
+	HarnessArgs                                 []string
 }
 
 // BindFlags registers coding-agent settings shared with the worker command.
@@ -20,6 +21,10 @@ func (o *WorkerOptions) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&o.Harness, "harness", "", "coding agent: claude or codex (required)")
 	fs.StringVar(&o.ClaudePermissionMode, "claude-permission-mode", "", "Claude Code permission mode")
 	fs.StringVar(&o.CodexSandbox, "codex-sandbox", "", "filesystem access Codex requests inside the sandbox (e.g. read-only or workspace-write)")
+	fs.Func("harness-arg", "one native coding-agent argument; repeat for each argument", func(arg string) error {
+		o.HarnessArgs = append(o.HarnessArgs, arg)
+		return nil
+	})
 	fs.DurationVar(&o.IdleTimeout, "idle-timeout", 5*time.Minute, "remove the container after this much idle time")
 	fs.DurationVar(&o.TurnTimeout, "turn-timeout", 30*time.Minute, "maximum time for one turn")
 }
@@ -33,7 +38,11 @@ func (o WorkerOptions) Adapter() (runner.Harness, error) {
 	if o.Harness == "codex" {
 		mode = o.CodexSandbox
 	}
-	return runner.NewHarness(o.Harness, mode, nil)
+	mode, extra, err := nativeArgs(o.Harness, mode, o.HarnessArgs)
+	if err != nil {
+		return nil, err
+	}
+	return runner.NewHarness(o.Harness, mode, extra)
 }
 
 // Options selects the execution backend and configures the worker.
@@ -67,6 +76,9 @@ func openBackend(name string, opts Options) (Backend, error) {
 		args := []string{"worker", "--harness", opts.Harness,
 			"--codex-sandbox", opts.CodexSandbox, "--claude-permission-mode", opts.ClaudePermissionMode,
 			"--idle-timeout", opts.IdleTimeout.String(), "--turn-timeout", opts.TurnTimeout.String()}
+		for _, arg := range opts.HarnessArgs {
+			args = append(args, "--harness-arg="+arg)
+		}
 		c, err := NewContainer(opts.Harness, name, opts.Image, opts.IdleTimeout, args)
 		if err != nil {
 			return nil, err

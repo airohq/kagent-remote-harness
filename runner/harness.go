@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/airohq/kagent-remote-harness/runner/wire"
 )
@@ -45,6 +46,17 @@ func NewHarness(name, mode string, extra []string) (Harness, error) {
 	return Codex{Sandbox: mode, ExtraArgs: extra}, nil
 }
 
+// An explicit local model overrides the turn's model without emitting the
+// option twice. Codex also accepts the short -m form.
+func hasModelArg(args []string, short bool) bool {
+	for _, arg := range args {
+		if arg == "--model" || strings.HasPrefix(arg, "--model=") || (short && strings.HasPrefix(arg, "-m")) {
+			return true
+		}
+	}
+	return false
+}
+
 // Claude runs `claude -p` with stream-json output.
 type Claude struct {
 	PermissionMode string
@@ -56,7 +68,7 @@ func (Claude) Command() string { return "claude" }
 
 func (c Claude) Args(turn wire.TurnRequest, _ string) ([]string, string) {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", c.PermissionMode}
-	if turn.Model != "" {
+	if turn.Model != "" && !hasModelArg(c.ExtraArgs, false) {
 		args = append(args, "--model", turn.Model)
 	}
 	if turn.Instructions != "" {
@@ -147,7 +159,7 @@ func (Codex) Command() string { return "codex" }
 
 func (c Codex) Args(turn wire.TurnRequest, workdir string) ([]string, string) {
 	args := []string{"exec", "--json", "--skip-git-repo-check", "-C", workdir}
-	if turn.Model != "" {
+	if turn.Model != "" && !hasModelArg(c.ExtraArgs, true) {
 		args = append(args, "-m", turn.Model)
 	}
 	prompt := turn.Prompt
