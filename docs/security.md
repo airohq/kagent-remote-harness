@@ -154,6 +154,11 @@ from kagent**, such as `Bash` in Claude Code's allowed tools.
 
 ## On-demand workers
 
+The optional supervisor flag `--workspace PATH` gives the worker a read-write
+bind mount of that directory at `/work/workspace`. The worker's OS permissions
+and the selected coding-agent mode govern edits. Stopping the supervisor or
+removing its state volume leaves those host files in place.
+
 The person starting the supervisor controls native coding-agent arguments.
 The worker passes them directly to the executable as separate arguments.
 

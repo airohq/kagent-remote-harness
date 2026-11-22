@@ -37,6 +37,7 @@ type engine interface {
 
 // Container keeps one worker warm between turns over the Engine API.
 type Container struct {
+	workspace     string
 	optionalLogin bool
 	harness       string
 	loginVolume   string
@@ -214,6 +215,11 @@ func (c *Container) start(ctx context.Context) error {
 			return fmt.Errorf("prepare Claude workspace exited with status %d", status)
 		}
 		c.claudeWorkspaceReady = true
+	}
+	if c.workspace != "" {
+		options.HostConfig.Mounts = append(options.HostConfig.Mounts, mount.Mount{
+			Type: mount.TypeBind, Source: c.workspace, Target: "/work/workspace",
+		})
 	}
 	if err := c.useLogin(ctx, &options); err != nil {
 		return err

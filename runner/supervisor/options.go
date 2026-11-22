@@ -4,6 +4,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/airohq/kagent-remote-harness/runner"
@@ -55,6 +57,31 @@ type Options struct {
 	// CodexLoginLabel. Its auth directory holds the file-backed Codex login.
 	CodexLoginVolume string
 	loginVolume      string
+	workspace        string
+}
+
+// SetWorkspace shares an existing host directory as the worker's working copy.
+func (o *Options) SetWorkspace(path string) error {
+	if path == "" {
+		return errors.New("--workspace requires a directory")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q is not a directory", path)
+	}
+	o.workspace = resolved
+	return nil
 }
 
 const defaultWorkerImage = "ghcr.io/airohq/kagent-remote-harness/runner:latest"
@@ -62,6 +89,7 @@ const defaultWorkerImage = "ghcr.io/airohq/kagent-remote-harness/runner:latest"
 // BindFlags installs the runner settings and their defaults.
 func (o *Options) BindFlags(fs *flag.FlagSet) {
 	o.WorkerOptions.BindFlags(fs)
+	fs.Func("workspace", "share an existing host `directory` as the working copy; edits persist on the host", o.SetWorkspace)
 	fs.BoolVar(&o.Verbose, "verbose", false, "show sandbox configuration, credential names, and turn event diagnostics")
 	fs.StringVar(&o.Backend, "sandbox", "container", "execution environment for the coding agent")
 	fs.StringVar(&o.Backend, "runner", "container", "legacy spelling of --sandbox")
@@ -83,6 +111,7 @@ func openBackend(name string, opts Options) (Backend, error) {
 		if err != nil {
 			return nil, err
 		}
+		c.workspace = opts.workspace
 		c.loginVolume = opts.loginVolume
 		if c.loginVolume == "" && opts.Harness == "codex" {
 			c.loginVolume = opts.CodexLoginVolume

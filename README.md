@@ -206,6 +206,12 @@ worker image. GitHub Actions publishes it to
 `ghcr.io/airohq/kagent-remote-harness/runner`. The `harness` target builds
 the in-cluster relay at `ghcr.io/airohq/kagent-remote-harness`.
 
+With `supervise --workspace PATH`, the working copy is an existing host directory
+bind-mounted at `/work/workspace`. Edits persist in that directory. The supervisor
+keeps session state in the named volume. For a remote Engine, the resolved
+absolute path must refer to the same directory on the daemon host. Native Linux
+filesystem permissions apply to the worker user (UID/GID 10001).
+
 On the first turn of each supervisor invocation, the container backend pulls
 the published default `ghcr.io/airohq/kagent-remote-harness/runner:latest`.
 It keeps the resulting image ID across idle worker restarts. A failed pull

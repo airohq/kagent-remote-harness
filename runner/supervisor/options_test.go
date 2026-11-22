@@ -2,11 +2,15 @@ package supervisor
 
 import (
 	"flag"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
 
 	"github.com/airohq/kagent-remote-harness/runner/wire"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 func TestSandboxSelection(t *testing.T) {
@@ -99,6 +103,68 @@ func TestInvalidNativeArgs(t *testing.T) {
 	} {
 		if _, _, err := nativeArgs(tc.harness, "default", []string{tc.arg}); err == nil {
 			t.Errorf("accepted %s %s", tc.harness, tc.arg)
+		}
+	}
+}
+
+func TestWorkspaceMount(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.Symlink(".", "checkout link"); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default", nil, ""},
+		{"relative", []string{"--workspace", "checkout link"}, resolved},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts Options
+			fs := flag.NewFlagSet("supervise", flag.ContinueOnError)
+			opts.BindFlags(fs)
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			opts.Image = "local/test"
+			b, err := openBackend("state", opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := b.(*Container)
+			c.engine.Close()
+			e := memoryEngine{created: make(chan client.ContainerCreateOptions, 1), removed: make(chan string, 1)}
+			c.engine = e
+			defer c.Close()
+			if err := c.start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			mounts := (<-e.created).HostConfig.Mounts
+			if len(mounts) == 0 || mounts[0].Type != mount.TypeVolume || mounts[0].Source != "state" || mounts[0].Target != "/work" {
+				t.Fatalf("state volume: %+v", mounts)
+			}
+			if tc.want == "" {
+				if len(mounts) != 1 {
+					t.Fatalf("unexpected mounts: %+v", mounts)
+				}
+			} else if len(mounts) != 2 || mounts[1].Type != mount.TypeBind || mounts[1].Source != tc.want || mounts[1].Target != "/work/workspace" || mounts[1].ReadOnly {
+				t.Fatalf("workspace mount: %+v", mounts)
+			}
+		})
+	}
+	if err := os.WriteFile("file", nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", "missing", "file"} {
+		var opts Options
+		if err := opts.SetWorkspace(invalid); err == nil {
+			t.Errorf("accepted workspace %q", invalid)
 		}
 	}
 }
