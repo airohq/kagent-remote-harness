@@ -33,7 +33,8 @@ a conversation to its machine (see [Sessions](#sessions)).
 
 ### `POST /v1/turn`
 
-Native coding-agent arguments are local worker settings. They apply across
+The host selects the working directory when starting the supervisor. A turn
+cannot request a host mount. Native coding-agent arguments are local worker settings. They apply across
 turns, including when resuming a conversation.
 
 ```json
