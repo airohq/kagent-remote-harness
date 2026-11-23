@@ -83,7 +83,11 @@ func TestNativeArgsReachWorkerAndHarness(t *testing.T) {
 					}
 					want = append(want, "-")
 				} else {
-					want = append([]string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", tc.mode}, tc.wantExtra...)
+					// --strict-mcp-config depends on this machine's managed
+					// MCP servers; the runner's tests cover it.
+					args = slices.DeleteFunc(args, func(arg string) bool { return arg == "--strict-mcp-config" })
+					want = append([]string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+						"--permission-mode", tc.mode, "--setting-sources", "project"}, tc.wantExtra...)
 					if session != "" {
 						want = append(want, "--resume", session)
 					}

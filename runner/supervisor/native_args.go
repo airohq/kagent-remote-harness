@@ -43,7 +43,7 @@ func managedArg(harness, name string) bool {
 	switch harness {
 	case "claude":
 		switch name {
-		case "-p", "--print", "--input-format", "--output-format", "--verbose", "-c", "--continue", "-r", "--resume", "--session-id", "--fork-session", "--no-session-persistence":
+		case "-p", "--print", "--input-format", "--output-format", "--verbose", "--include-partial-messages", "-c", "--continue", "-r", "--resume", "--session-id", "--fork-session", "--no-session-persistence":
 			return true
 		}
 	case "codex":

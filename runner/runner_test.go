@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,6 +94,7 @@ func events(t *testing.T, resp *http.Response) []wire.Event {
 }
 
 func TestTurnRunsClaudeAndStreamsEvents(t *testing.T) {
+	noManagedMCP(t)
 	dir := fakeClaude(t, claudeTurn)
 	t.Setenv("REMOTE_HARNESS_TOKEN", testToken)
 	srv := newTestRunner(t, Config{Harness: Claude{PermissionMode: "acceptEdits", ExtraArgs: []string{"--disallowedTools=Bash"}}})
@@ -118,15 +120,99 @@ func TestTurnRunsClaudeAndStreamsEvents(t *testing.T) {
 	}
 
 	args, _ := os.ReadFile(filepath.Join(dir, "args"))
-	wantArgs := "-p\n--output-format\nstream-json\n--verbose\n--permission-mode\nacceptEdits\n--model\nopus\n--append-system-prompt\nbe brief\n--disallowedTools=Bash\n--resume\ns1\n"
+	wantArgs := "-p\n--output-format\nstream-json\n--verbose\n--include-partial-messages\n--permission-mode\nacceptEdits\n" +
+		"--strict-mcp-config\n--setting-sources\nproject\n--settings\n{\"disableAllHooks\":true}\n" +
+		"--model\nopus\n--append-system-prompt\nbe brief\n--disallowedTools=Bash\n--resume\ns1\n"
 	if string(args) != wantArgs {
 		t.Errorf("args =\n%s\nwant\n%s", args, wantArgs)
 	}
 	if stdin, _ := os.ReadFile(filepath.Join(dir, "stdin")); string(stdin) != "fix it" {
 		t.Errorf("stdin = %q", stdin)
 	}
-	if env, _ := os.ReadFile(filepath.Join(dir, "env")); strings.Contains(string(env), testToken) {
+	env, _ := os.ReadFile(filepath.Join(dir, "env"))
+	if strings.Contains(string(env), testToken) {
 		t.Error("the coding agent's environment holds the runner's token")
+	}
+	for _, kv := range []string{"CLAUDE_CODE_ENTRYPOINT=" + ClaudeEntrypoint, "ENABLE_CLAUDEAI_MCP_SERVERS=false", "CLAUDE_CODE_AUTO_CONNECT_IDE=0"} {
+		if !slices.Contains(strings.Split(string(env), "\n"), kv) {
+			t.Errorf("environment lacks %s", kv)
+		}
+	}
+}
+
+func TestClaudeArgsKeepNativeChoices(t *testing.T) {
+	noManagedMCP(t)
+	args, _ := Claude{PermissionMode: "plan", ExtraArgs: []string{"--setting-sources=user,project", "--settings", "my.json"}}.Args(wire.TurnRequest{Prompt: "x"}, ".")
+	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", "plan",
+		"--strict-mcp-config", "--setting-sources=user,project", "--settings", "my.json"}
+	if !slices.Equal(args, want) {
+		t.Errorf("args = %q, want %q", args, want)
+	}
+
+	// Claude Code rejects --strict-mcp-config next to managed MCP servers.
+	claudeManagedMCPConfigs = []string{filepath.Join(t.TempDir(), "managed-mcp.json")}
+	if err := os.WriteFile(claudeManagedMCPConfigs[0], []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if args, _ := (Claude{PermissionMode: "plan"}).Args(wire.TurnRequest{}, "."); slices.Contains(args, "--strict-mcp-config") {
+		t.Errorf("args = %q, want no --strict-mcp-config with managed MCP servers", args)
+	}
+}
+
+// noManagedMCP makes the test independent of this machine's managed MCP
+// servers.
+func noManagedMCP(t *testing.T) {
+	saved := claudeManagedMCPConfigs
+	claudeManagedMCPConfigs = nil
+	t.Cleanup(func() { claudeManagedMCPConfigs = saved })
+}
+
+func TestClaudeStreamsTextOnce(t *testing.T) {
+	lines := []string{
+		`{"type":"system","subtype":"init","session_id":"s1"}`,
+		// A streamed text block, then its whole text.
+		`{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hel"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"lo"}}}`,
+		`{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
+		// A tool call, streamed as JSON, in the same message.
+		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}}`,
+		`{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{}}]}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":1}}`,
+		`{"type":"stream_event","event":{"type":"message_stop"}}`,
+		// A subagent's message, not streamed, between the main thread's.
+		`{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"m2","content":[{"type":"text","text":"sub"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
+		// A block cut short in the stream, completed by its whole text.
+		`{"type":"stream_event","event":{"type":"message_start","message":{"id":"m3"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"do"}}}`,
+		`{"type":"assistant","message":{"id":"m3","content":[{"type":"text","text":"done"}]}}`,
+		// The same message again changes nothing.
+		`{"type":"assistant","message":{"id":"m3","content":[{"type":"text","text":"done"}]}}`,
+	}
+	var got []string
+	p := newClaudeParser(func(ev wire.Event) {
+		switch ev.Type {
+		case wire.EventText:
+			got = append(got, ev.Text)
+		default:
+			got = append(got, ev.Type+":"+ev.Name)
+		}
+	})
+	for _, line := range lines {
+		var m claudeMessage
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		p.parse(m)
+	}
+	want := []string{"session:", "hel", "lo", "tool_call:Agent", "sub", "tool_result:Agent", "do", "ne"}
+	if !slices.Equal(got, want) {
+		t.Errorf("events = %q, want %q", got, want)
 	}
 }
 

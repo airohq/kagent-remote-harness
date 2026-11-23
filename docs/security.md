@@ -105,12 +105,21 @@ does without asking; the runner has no default:
 
 | Harness | Flag | For example | What it does without asking |
 | --- | --- | --- | --- |
-| `claude` | `--claude-permission-mode` | `acceptEdits` | Edits files. Refuses other tools that need approval, unless your Claude Code settings allow them |
+| `claude` | `--claude-permission-mode` | `acceptEdits` | Edits files. Refuses other tools that need approval, unless the project's Claude Code settings allow them |
 | `codex` | `--codex-sandbox` | `workspace-write` | Edits files and runs commands in the working directory |
 | `codex` | `--codex-sandbox` | `read-only` | Reads files and runs read-only commands |
 
 **What you allow in the coding agent's own settings, you allow for every turn
 from kagent**, such as `Bash` in Claude Code's allowed tools.
+
+**Claude Code turns start clean.** They read only the working directory's
+project settings (`.claude/settings.json`), not your own settings, plugins or
+local settings, run no hooks, and connect to no MCP server: neither yours,
+the project's `.mcp.json`, nor claude.ai's. An organization's managed MCP
+servers still connect, since Claude Code allows no other choice. Bring back
+what a turn needs with harness args, such as
+`--harness-arg=--mcp-config=servers.json` or
+`--harness-arg=--setting-sources=user,project`.
 
 ## Credentials
 

@@ -273,7 +273,7 @@ runs on your machine:
 
 | `--harness` | New conversation | Later turns | Signs in with |
 | --- | --- | --- | --- |
-| `claude` | `claude -p --output-format stream-json --verbose --permission-mode <mode> [--model <model>] [--append-system-prompt <instructions>] [<harness args>]` | The same, plus `--resume <session>` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
+| `claude` | `claude -p --output-format stream-json --verbose --include-partial-messages --permission-mode <mode> --strict-mcp-config --setting-sources project --settings '{"disableAllHooks":true}' [--model <model>] [--append-system-prompt <instructions>] [<harness args>]` | The same, plus `--resume <session>` | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | `codex` | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] --sandbox <sandbox> [<harness args>] -`, with the instructions before the prompt | `codex exec --json --skip-git-repo-check -C <workdir> [-m <model>] -c sandbox_mode="<sandbox>" [<harness args>] resume <thread> -` | `CODEX_API_KEY`, or your Codex login. The on-demand container also accepts the host’s `OPENAI_API_KEY`. |
 
 - **`<model>` comes from the Agent's `modelConfig`**, and is left out when
@@ -289,8 +289,17 @@ runs on your machine:
   accepts this repeatable flag too. Each occurrence carries one literal argument
   into the worker on fresh and resumed turns. A native model selection overrides
   the model from the turn. Container workers must support `--harness-arg`.
+- **Claude Code starts clean, and streams its text as it writes it.** A turn
+  uses the project's settings but not yours, runs no hooks, and connects to
+  no MCP server, which also makes its first words arrive sooner. Your own
+  `--setting-sources`, `--settings` or `--strict-mcp-config` harness args
+  replace the runner's. The runner leaves out `--strict-mcp-config` when your
+  organization manages MCP servers (`managed-mcp.json`), because Claude Code
+  rejects it then. See [Approvals](docs/security.md#approvals).
 - **The coding agent gets the runner's environment without the runner's
-  token**, so a turn can't read the token.
+  token**, so a turn can't read the token. For Claude Code, the runner also
+  sets `CLAUDE_CODE_ENTRYPOINT=kagent-remote-harness`,
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_AUTO_CONNECT_IDE=0`.
 
 ### Choose the model
 
