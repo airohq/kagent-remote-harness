@@ -363,8 +363,11 @@ func (c Codex) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit E
 		case "thread.started":
 			emit(wire.Event{Type: wire.EventSession, ContinuationID: ev.ThreadID})
 		case "item.started":
-			if ev.Item.Type == "command_execution" {
+			switch ev.Item.Type {
+			case "command_execution":
 				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "shell", Arguments: map[string]any{"command": ev.Item.Command}})
+			case "mcp_tool_call":
+				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Arguments: ev.Item.Arguments})
 			}
 		case "item.completed":
 			switch ev.Item.Type {
@@ -376,6 +379,17 @@ func (c Codex) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit E
 			case "file_change":
 				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "file_change", Arguments: map[string]any{"changes": ev.Item.Changes}})
 				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "file_change", Result: ev.Item.Status})
+			case "web_search":
+				// The query is known only when the search has finished.
+				results := make([]map[string]any, 0, len(ev.Item.Results))
+				for _, r := range ev.Item.Results {
+					results = append(results, map[string]any{"title": r.Title, "url": r.URL})
+				}
+				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "web_search", Arguments: map[string]any{"query": ev.Item.Query}})
+				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "web_search", Result: results})
+			case "mcp_tool_call":
+				result, failed := codexMCPResult(ev)
+				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Result: result, IsError: failed})
 			}
 		case "turn.completed":
 			completed = true
@@ -415,5 +429,55 @@ type codexEvent struct {
 		ExitCode         *int   `json:"exit_code"`
 		Status           string `json:"status"`
 		Changes          any    `json:"changes"`
+		// web_search
+		Query   string `json:"query"`
+		Results []struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"results"`
+		// mcp_tool_call
+		Server    string         `json:"server"`
+		Tool      string         `json:"tool"`
+		Arguments map[string]any `json:"arguments"`
+		Result    *struct {
+			Content           []codexContent `json:"content"`
+			StructuredContent any            `json:"structured_content"`
+		} `json:"result"`
+		CallError *struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	} `json:"item"`
+}
+
+type codexContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// codexMCPName names an MCP tool as Claude Code does, mcp__server__tool, the
+// form kagent reads as an MCP tool.
+func codexMCPName(server, tool string) string {
+	return "mcp__" + server + "__" + tool
+}
+
+// codexMCPResult is an MCP call's text, or its structured content when it
+// has no text, and whether the call failed.
+func codexMCPResult(ev codexEvent) (any, bool) {
+	failed := ev.Item.Status == "failed" || ev.Item.CallError != nil
+	if ev.Item.CallError != nil && ev.Item.CallError.Message != "" {
+		return ev.Item.CallError.Message, true
+	}
+	if ev.Item.Result == nil {
+		return nil, failed
+	}
+	var texts []string
+	for _, c := range ev.Item.Result.Content {
+		if c.Type == "text" {
+			texts = append(texts, c.Text)
+		}
+	}
+	if len(texts) == 0 && ev.Item.Result.StructuredContent != nil {
+		return ev.Item.Result.StructuredContent, failed
+	}
+	return strings.Join(texts, "\n"), failed
 }

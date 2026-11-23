@@ -411,3 +411,59 @@ exit 1
 		t.Fatalf("unexpected verbose log: %s", log)
 	}
 }
+
+// fakeCodex writes a `codex` script to a directory on PATH that prints lines.
+func fakeCodex(t *testing.T, lines ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	body := "#!/bin/sh\ncat >/dev/null\ncat <<'EOF'\n" + strings.Join(lines, "\n") + "\nEOF\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// codexEvents runs a Codex turn and returns its events between the session
+// and done, as JSON.
+func codexEvents(t *testing.T) []string {
+	t.Helper()
+	srv := newTestRunner(t, Config{Harness: Codex{Sandbox: "read-only"}})
+	evs := events(t, post(t, t.Context(), srv.URL, testToken, wire.TurnRequest{Prompt: "x"}))
+	if len(evs) < 2 || evs[0].Type != wire.EventSession || evs[len(evs)-1].Type != wire.EventDone {
+		t.Fatalf("events = %+v", evs)
+	}
+	var got []string
+	for _, ev := range evs[1 : len(evs)-1] {
+		b, _ := json.Marshal(ev)
+		got = append(got, string(b))
+	}
+	return got
+}
+
+func TestCodexReportsSearchesAndMCPCalls(t *testing.T) {
+	// Lines as codex exec --json 0.171 prints them.
+	fakeCodex(t,
+		`{"type":"thread.started","thread_id":"th1"}`,
+		`{"type":"item.started","item":{"id":"item_1","type":"web_search","id":"ws1","query":"","action":{"type":"other"}}}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"web_search","id":"ws1","query":"latest Go release","action":{"type":"search","query":"latest Go release"},"results":[{"type":"text_result","title":"Release History","url":"https://go.dev/doc/devel/release","snippet":"…"}]}}`,
+		`{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"echo","tool":"shout","arguments":{"text":"hello mcp"},"result":null,"error":null,"status":"in_progress"}}`,
+		`{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"echo","tool":"shout","arguments":{"text":"hello mcp"},"result":{"content":[{"type":"text","text":"HELLO MCP"}],"structured_content":null},"error":null,"status":"completed"}}`,
+		`{"type":"item.started","item":{"id":"item_3","type":"mcp_tool_call","server":"echo","tool":"shout","arguments":{"text":"fail"},"result":null,"error":null,"status":"in_progress"}}`,
+		`{"type":"item.completed","item":{"id":"item_3","type":"mcp_tool_call","server":"echo","tool":"shout","arguments":{"text":"fail"},"result":{"content":[{"type":"text","text":"shout refused"}],"structured_content":null},"error":null,"status":"failed"}}`,
+		`{"type":"item.completed","item":{"id":"item_4","type":"mcp_tool_call","server":"echo","tool":"gone","arguments":{},"result":null,"error":{"message":"tool not found"},"status":"failed"}}`,
+		`{"type":"turn.completed","usage":{}}`,
+	)
+	got := codexEvents(t)
+	want := []string{
+		`{"type":"tool_call","id":"ws1","name":"web_search","arguments":{"query":"latest Go release"}}`,
+		`{"type":"tool_result","id":"ws1","name":"web_search","result":[{"title":"Release History","url":"https://go.dev/doc/devel/release"}]}`,
+		`{"type":"tool_call","id":"item_2","name":"mcp__echo__shout","arguments":{"text":"hello mcp"}}`,
+		`{"type":"tool_result","id":"item_2","name":"mcp__echo__shout","result":"HELLO MCP"}`,
+		`{"type":"tool_call","id":"item_3","name":"mcp__echo__shout","arguments":{"text":"fail"}}`,
+		`{"type":"tool_result","id":"item_3","name":"mcp__echo__shout","result":"shout refused","is_error":true}`,
+		`{"type":"tool_result","id":"item_4","name":"mcp__echo__gone","result":"tool not found","is_error":true}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
