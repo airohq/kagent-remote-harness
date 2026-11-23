@@ -215,7 +215,8 @@ type claudeMessage struct {
 // the assistant message only text it did not stream. As kagent's own Claude
 // harness does, it keys a text block by its message ID and index.
 type claudeParser struct {
-	emit Emit
+	// out keeps text blocks apart: a block is a message.
+	out *messages
 	// threads holds the stream of the main conversation ("") and of each
 	// subagent, by parent_tool_use_id.
 	threads map[string]*claudeThread
@@ -233,7 +234,7 @@ type claudeThread struct {
 }
 
 func newClaudeParser(emit Emit) *claudeParser {
-	return &claudeParser{emit: emit, threads: map[string]*claudeThread{}, toolNames: map[string]string{}}
+	return &claudeParser{out: &messages{emit: emit}, threads: map[string]*claudeThread{}, toolNames: map[string]string{}}
 }
 
 func (p *claudeParser) thread(parent string) *claudeThread {
@@ -249,7 +250,7 @@ func (p *claudeParser) parse(m claudeMessage) {
 	switch m.Type {
 	case "system":
 		if m.Subtype == "init" && m.SessionID != "" {
-			p.emit(wire.Event{Type: wire.EventSession, ContinuationID: m.SessionID})
+			p.out.event(wire.Event{Type: wire.EventSession, ContinuationID: m.SessionID})
 		}
 	case "stream_event":
 		t := p.thread(m.ParentToolUseID)
@@ -262,7 +263,7 @@ func (p *claudeParser) parse(m claudeMessage) {
 		case "content_block_delta":
 			if ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
 				t.text[blockKey(t.messageID, ev.Index)] += ev.Delta.Text
-				p.emit(wire.Event{Type: wire.EventText, Text: ev.Delta.Text})
+				p.out.text(blockKey(t.messageID, ev.Index), ev.Delta.Text)
 			}
 		case "content_block_stop":
 			if t.active == ev.Index {
@@ -291,13 +292,13 @@ func (p *claudeParser) parse(m claudeMessage) {
 					continue
 				}
 				p.toolNames[c.ID] = c.Name
-				p.emit(wire.Event{Type: wire.EventToolCall, ID: c.ID, Name: c.Name, Arguments: c.Input})
+				p.out.event(wire.Event{Type: wire.EventToolCall, ID: c.ID, Name: c.Name, Arguments: c.Input})
 			}
 		}
 	case "user":
 		for _, c := range m.Message.Content {
 			if c.Type == "tool_result" {
-				p.emit(wire.Event{Type: wire.EventToolResult, ID: c.ToolUseID, Name: p.toolNames[c.ToolUseID], Result: c.Content, IsError: c.IsError})
+				p.out.event(wire.Event{Type: wire.EventToolResult, ID: c.ToolUseID, Name: p.toolNames[c.ToolUseID], Result: c.Content, IsError: c.IsError})
 			}
 		}
 	}
@@ -312,7 +313,7 @@ func (p *claudeParser) text(t *claudeThread, key, final string) {
 		return
 	}
 	t.text[key] = final
-	p.emit(wire.Event{Type: wire.EventText, Text: final[len(streamed):]})
+	p.out.text(key, final[len(streamed):])
 }
 
 func blockKey(messageID string, index int) string {
@@ -352,6 +353,8 @@ func (c Codex) Args(turn wire.TurnRequest, workdir string) ([]string, string) {
 
 func (c Codex) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit Emit) error {
 	args, stdin := c.Args(turn, p.Dir)
+	// An agent message is a message of its own.
+	out := &messages{emit: emit}
 	var failure string
 	completed := false
 	err := p.Stream(ctx, c.Command(), args, stdin, func(line []byte) {
@@ -361,35 +364,35 @@ func (c Codex) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit E
 		}
 		switch ev.Type {
 		case "thread.started":
-			emit(wire.Event{Type: wire.EventSession, ContinuationID: ev.ThreadID})
+			out.event(wire.Event{Type: wire.EventSession, ContinuationID: ev.ThreadID})
 		case "item.started":
 			switch ev.Item.Type {
 			case "command_execution":
-				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "shell", Arguments: map[string]any{"command": ev.Item.Command}})
+				out.event(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "shell", Arguments: map[string]any{"command": ev.Item.Command}})
 			case "mcp_tool_call":
-				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Arguments: ev.Item.Arguments})
+				out.event(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Arguments: ev.Item.Arguments})
 			}
 		case "item.completed":
 			switch ev.Item.Type {
 			case "agent_message":
-				emit(wire.Event{Type: wire.EventText, Text: ev.Item.Text})
+				out.text(ev.Item.ID, ev.Item.Text)
 			case "command_execution":
-				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "shell", Result: ev.Item.AggregatedOutput,
+				out.event(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "shell", Result: ev.Item.AggregatedOutput,
 					IsError: ev.Item.ExitCode != nil && *ev.Item.ExitCode != 0})
 			case "file_change":
-				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "file_change", Arguments: map[string]any{"changes": ev.Item.Changes}})
-				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "file_change", Result: ev.Item.Status})
+				out.event(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "file_change", Arguments: map[string]any{"changes": ev.Item.Changes}})
+				out.event(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "file_change", Result: ev.Item.Status})
 			case "web_search":
 				// The query is known only when the search has finished.
 				results := make([]map[string]any, 0, len(ev.Item.Results))
 				for _, r := range ev.Item.Results {
 					results = append(results, map[string]any{"title": r.Title, "url": r.URL})
 				}
-				emit(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "web_search", Arguments: map[string]any{"query": ev.Item.Query}})
-				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "web_search", Result: results})
+				out.event(wire.Event{Type: wire.EventToolCall, ID: ev.Item.ID, Name: "web_search", Arguments: map[string]any{"query": ev.Item.Query}})
+				out.event(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: "web_search", Result: results})
 			case "mcp_tool_call":
 				result, failed := codexMCPResult(ev)
-				emit(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Result: result, IsError: failed})
+				out.event(wire.Event{Type: wire.EventToolResult, ID: ev.Item.ID, Name: codexMCPName(ev.Item.Server, ev.Item.Tool), Result: result, IsError: failed})
 			}
 		case "turn.completed":
 			completed = true

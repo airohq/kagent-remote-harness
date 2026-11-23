@@ -412,6 +412,64 @@ exit 1
 	}
 }
 
+func TestCodexKeepsMessagesApart(t *testing.T) {
+	fakeCodex(t,
+		`{"type":"thread.started","thread_id":"th1"}`,
+		`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I'll check."}}`,
+		// Neither is an event, so the next message follows this one directly.
+		`{"type":"item.completed","item":{"id":"item_1","type":"reasoning","text":""}}`,
+		`{"type":"item.completed","item":{"id":"item_2","type":"todo_list","items":[]}}`,
+		`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"It is 1.27."}}`,
+		// After a tool, kagent starts a new artifact by itself.
+		`{"type":"item.started","item":{"id":"item_4","type":"command_execution","command":"go version","status":"in_progress"}}`,
+		`{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"go version","aggregated_output":"go1.27","exit_code":0,"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"Confirmed."}}`,
+		`{"type":"turn.completed","usage":{}}`,
+	)
+	got := codexEvents(t)
+	want := []string{
+		`{"type":"text","text":"I'll check."}`,
+		`{"type":"text","text":"\n\nIt is 1.27."}`,
+		`{"type":"tool_call","id":"item_4","name":"shell","arguments":{"command":"go version"}}`,
+		`{"type":"tool_result","id":"item_4","name":"shell","result":"go1.27"}`,
+		`{"type":"text","text":"Confirmed."}`,
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestClaudeKeepsTextBlocksApart(t *testing.T) {
+	lines := []string{
+		`{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I'll check."}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
+		// Thinking between two text blocks of one message.
+		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"thinking"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":""}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":1}}`,
+		`{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"text"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"It is"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":" 1.27."}}}`,
+		`{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"It is 1.27."}]}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop","index":2}}`,
+		`{"type":"stream_event","event":{"type":"message_stop"}}`,
+	}
+	var got []string
+	p := newClaudeParser(func(ev wire.Event) { got = append(got, ev.Text) })
+	for _, line := range lines {
+		var m claudeMessage
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		p.parse(m)
+	}
+	if want := []string{"I'll check.", "\n\nIt is", " 1.27."}; !slices.Equal(got, want) {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+}
+
 // fakeCodex writes a `codex` script to a directory on PATH that prints lines.
 func fakeCodex(t *testing.T, lines ...string) {
 	t.Helper()
