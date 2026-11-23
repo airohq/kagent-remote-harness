@@ -254,11 +254,19 @@ using the host’s `OPENAI_API_KEY` as a fallback.
 
 Hosts embedding the supervisor can call `Options.PrepareCredentials` before
 accepting turns. The container sandbox uses explicit environment credentials
-first. For its shipped image it checks the selected provider’s saved login.
-If needed, a terminal can complete native Codex device sign-in or Claude
+first. For its shipped image it checks the selected provider’s saved login,
+without network access, so the check never spends a refresh token. A login
+that is missing, signed out, or whose Claude sign-in has ended counts as
+none. Then a terminal can complete native Codex device sign-in or Claude
 Code subscription sign-in. Supply a nil terminal for unattended operation.
 Each provider has a dedicated engine volume, separate from workspace storage.
 Custom images supply their own credential setup.
+
+**A Claude login refreshed during a turn is saved for the next one.** Claude
+Code's refresh replaces its single-use refresh token, so the worker runs
+Claude through a wrapper that writes the refreshed login back to the login
+volume after each run. A turn that fails because Claude is no longer signed in
+says so, and the next start asks you to sign in again.
 
 The engine receives the selected coding agent's provider credentials.
 Canceling a running turn releases the container. Use the same name and engine

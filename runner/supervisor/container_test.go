@@ -224,6 +224,22 @@ func (e loginVolumeEngine) VolumeInspect(_ context.Context, _ string, _ client.V
 	return client.VolumeInspectResult{Volume: volume.Volume{Labels: e.labels}}, nil
 }
 
+func TestSignedOutFailureSaysHowToSignIn(t *testing.T) {
+	signedOut := runner.ErrClaudeSignedOut.Error() + ": Failed to authenticate: OAuth session expired and could not be refreshed"
+	for _, tc := range []struct {
+		login, message, want string
+	}{
+		{"login-volume", signedOut, signedOut + ". Restart the server in a terminal to sign in again"},
+		{"", signedOut, signedOut + ". Set a valid CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY"},
+		{"login-volume", "claude: error_max_turns", "claude: error_max_turns"},
+	} {
+		c := Container{harness: "claude", loginVolume: tc.login}
+		if got := c.failureHint(tc.message); got != tc.want {
+			t.Errorf("failureHint(%q) = %q, want %q", tc.message, got, tc.want)
+		}
+	}
+}
+
 func TestProviderLoginMount(t *testing.T) {
 	const name = "login-test"
 	for _, tt := range []struct {
@@ -248,12 +264,22 @@ func TestProviderLoginMount(t *testing.T) {
 		}
 		if tt.mounted {
 			m := opts.HostConfig.Mounts[0]
-			subpath, target := "auth", "/run/codex-login"
+			// Claude Code saves a refreshed login by replacing the file, so
+			// the login's directory is mounted, not the file.
+			target, entrypoint := "/run/codex-login", codexLoginEntrypoint
 			if tt.harness == "claude" {
-				subpath, target = "auth/.credentials.json", "/work/state/claude/.credentials.json"
+				target, entrypoint = "/run/claude-login", claudeLoginEntrypoint
 			}
-			if m.Source != name || m.VolumeOptions.Subpath != subpath || m.Target != target {
+			if m.Source != name || m.VolumeOptions.Subpath != "auth" || m.Target != target || m.ReadOnly {
 				t.Fatalf("unexpected login mount: %+v", m)
+			}
+			if len(opts.Config.Entrypoint) < 3 || opts.Config.Entrypoint[2] != entrypoint {
+				t.Fatalf("unexpected entrypoint: %q", opts.Config.Entrypoint)
+			}
+			// Claude's login wrapper runs from a tmpfs, which is noexec by
+			// default.
+			if bin := opts.HostConfig.Tmpfs["/run/claude-bin"]; (tt.harness == "claude") != strings.Contains(bin, ",exec,") {
+				t.Fatalf("unexpected wrapper tmpfs: %q", bin)
 			}
 		}
 	}
