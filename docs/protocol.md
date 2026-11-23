@@ -90,6 +90,10 @@ that ends without one failed, such as when the connection broke.
 **The runner flushes each event as it happens**, so kagent shows the agent's
 progress live. It cuts a line from the coding agent over 1 MiB short.
 
+**`text` events append to the agent's answer.** Claude Code's text streams as
+it is written, a few words per event, and each piece arrives once. Codex's
+text arrives one message per event.
+
 **A turn that runs longer than the runner's `--turn-timeout` ends with a
 `failure`** that says so, after the runner stops the coding agent.
 

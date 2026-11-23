@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/airohq/kagent-remote-harness/runner/wire"
@@ -57,7 +59,8 @@ func hasModelArg(args []string, short bool) bool {
 	return false
 }
 
-// Claude runs `claude -p` with stream-json output.
+// Claude runs `claude -p` with stream-json output and partial messages, so
+// text streams as the model writes it.
 type Claude struct {
 	PermissionMode string
 	ExtraArgs      []string
@@ -66,8 +69,34 @@ type Claude struct {
 func (Claude) Name() string    { return "claude" }
 func (Claude) Command() string { return "claude" }
 
+// ClaudeEntrypoint is the CLAUDE_CODE_ENTRYPOINT the runner gives Claude Code.
+const ClaudeEntrypoint = "kagent-remote-harness"
+
+// claudeCleanSettings turns off hooks: a turn runs no command it was not
+// asked to, and starts faster.
+const claudeCleanSettings = `{"disableAllHooks":true}`
+
+// claudeManagedMCPConfigs are where an organization's managed MCP servers
+// live. Claude Code rejects --strict-mcp-config when one exists.
+var claudeManagedMCPConfigs = []string{
+	"/Library/Application Support/ClaudeCode/managed-mcp.json",
+	"/etc/claude-code/managed-mcp.json",
+	`C:\Program Files\ClaudeCode\managed-mcp.json`,
+}
+
 func (c Claude) Args(turn wire.TurnRequest, _ string) ([]string, string) {
-	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", c.PermissionMode}
+	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", c.PermissionMode}
+	// A turn starts clean: without the person's own MCP servers, settings,
+	// plugins and hooks. The project's settings stay; they belong to the work.
+	if !hasArg(c.ExtraArgs, "--strict-mcp-config") && !managedMCPConfig() {
+		args = append(args, "--strict-mcp-config")
+	}
+	if !hasArg(c.ExtraArgs, "--setting-sources") {
+		args = append(args, "--setting-sources", "project")
+	}
+	if !hasArg(c.ExtraArgs, "--settings") {
+		args = append(args, "--settings", claudeCleanSettings)
+	}
 	if turn.Model != "" && !hasModelArg(c.ExtraArgs, false) {
 		args = append(args, "--model", turn.Model)
 	}
@@ -81,40 +110,59 @@ func (c Claude) Args(turn wire.TurnRequest, _ string) ([]string, string) {
 	return args, turn.Prompt
 }
 
+func hasArg(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func managedMCPConfig() bool {
+	for _, path := range claudeManagedMCPConfigs {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// ClaudeEnv returns env for a Claude Code turn: Claude Code reports the
+// runner as its entrypoint, and connects to neither claude.ai's MCP servers
+// nor an IDE.
+func ClaudeEnv(env []string) []string {
+	out := make([]string, 0, len(env)+3)
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "CLAUDE_CODE_ENTRYPOINT", "ENABLE_CLAUDEAI_MCP_SERVERS", "CLAUDE_CODE_AUTO_CONNECT_IDE":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out,
+		"CLAUDE_CODE_ENTRYPOINT="+ClaudeEntrypoint,
+		"ENABLE_CLAUDEAI_MCP_SERVERS=false",
+		"CLAUDE_CODE_AUTO_CONNECT_IDE=0",
+	)
+}
+
 func (c Claude) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit Emit) error {
 	args, stdin := c.Args(turn, p.Dir)
+	p.Env = ClaudeEnv(p.Env)
 	var result *claudeMessage
-	// Claude's tool results carry only the tool's ID; kagent wants its name.
-	toolNames := map[string]string{}
+	parser := newClaudeParser(emit)
 	err := p.Stream(ctx, c.Command(), args, stdin, func(line []byte) {
 		var m claudeMessage
 		if json.Unmarshal(line, &m) != nil {
 			return // not a message, such as a warning
 		}
-		switch m.Type {
-		case "system":
-			if m.Subtype == "init" && m.SessionID != "" {
-				emit(wire.Event{Type: wire.EventSession, ContinuationID: m.SessionID})
-			}
-		case "assistant":
-			for _, c := range m.Message.Content {
-				switch c.Type {
-				case "text":
-					emit(wire.Event{Type: wire.EventText, Text: c.Text})
-				case "tool_use":
-					toolNames[c.ID] = c.Name
-					emit(wire.Event{Type: wire.EventToolCall, ID: c.ID, Name: c.Name, Arguments: c.Input})
-				}
-			}
-		case "user":
-			for _, c := range m.Message.Content {
-				if c.Type == "tool_result" {
-					emit(wire.Event{Type: wire.EventToolResult, ID: c.ToolUseID, Name: toolNames[c.ToolUseID], Result: c.Content, IsError: c.IsError})
-				}
-			}
-		case "result":
+		if m.Type == "result" {
 			result = &m
+			return
 		}
+		parser.parse(m)
 	})
 	if err != nil {
 		return err
@@ -129,12 +177,25 @@ func (c Claude) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit 
 }
 
 type claudeMessage struct {
-	Type      string `json:"type"`
-	Subtype   string `json:"subtype"`
-	SessionID string `json:"session_id"`
-	IsError   bool   `json:"is_error"`
-	Result    string `json:"result"`
-	Message   struct {
+	Type            string `json:"type"`
+	Subtype         string `json:"subtype"`
+	SessionID       string `json:"session_id"`
+	ParentToolUseID string `json:"parent_tool_use_id"`
+	IsError         bool   `json:"is_error"`
+	Result          string `json:"result"`
+	Event           struct {
+		Type    string `json:"type"`
+		Index   int    `json:"index"`
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	} `json:"event"`
+	Message struct {
+		ID      string `json:"id"`
 		Content []struct {
 			Type      string         `json:"type"`
 			Text      string         `json:"text"`
@@ -146,6 +207,116 @@ type claudeMessage struct {
 			IsError   bool           `json:"is_error"`
 		} `json:"content"`
 	} `json:"message"`
+}
+
+// claudeParser turns Claude Code's messages into events. With partial
+// messages, Claude Code streams each text block's deltas, then repeats the
+// whole block in an assistant message. The parser emits the deltas, and from
+// the assistant message only text it did not stream. As kagent's own Claude
+// harness does, it keys a text block by its message ID and index.
+type claudeParser struct {
+	emit Emit
+	// threads holds the stream of the main conversation ("") and of each
+	// subagent, by parent_tool_use_id.
+	threads map[string]*claudeThread
+	// toolNames names tool calls by ID: Claude's tool results carry only the
+	// tool's ID, and kagent wants its name.
+	toolNames map[string]string
+}
+
+type claudeThread struct {
+	messageID string
+	// active is the content block being streamed, or -1.
+	active int
+	// text is what was emitted of each text block, by "message:index".
+	text map[string]string
+}
+
+func newClaudeParser(emit Emit) *claudeParser {
+	return &claudeParser{emit: emit, threads: map[string]*claudeThread{}, toolNames: map[string]string{}}
+}
+
+func (p *claudeParser) thread(parent string) *claudeThread {
+	t := p.threads[parent]
+	if t == nil {
+		t = &claudeThread{active: -1, text: map[string]string{}}
+		p.threads[parent] = t
+	}
+	return t
+}
+
+func (p *claudeParser) parse(m claudeMessage) {
+	switch m.Type {
+	case "system":
+		if m.Subtype == "init" && m.SessionID != "" {
+			p.emit(wire.Event{Type: wire.EventSession, ContinuationID: m.SessionID})
+		}
+	case "stream_event":
+		t := p.thread(m.ParentToolUseID)
+		ev := m.Event
+		switch ev.Type {
+		case "message_start":
+			t.messageID, t.active = ev.Message.ID, -1
+		case "content_block_start":
+			t.active = ev.Index
+		case "content_block_delta":
+			if ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+				t.text[blockKey(t.messageID, ev.Index)] += ev.Delta.Text
+				p.emit(wire.Event{Type: wire.EventText, Text: ev.Delta.Text})
+			}
+		case "content_block_stop":
+			if t.active == ev.Index {
+				t.active = -1
+			}
+		case "message_stop":
+			t.active = -1
+		}
+	case "assistant":
+		t := p.thread(m.ParentToolUseID)
+		if id := m.Message.ID; id != "" && id != t.messageID {
+			t.messageID, t.active = id, -1
+		}
+		for i, c := range m.Message.Content {
+			switch c.Type {
+			case "text":
+				index := i
+				// Claude Code sends an assistant message for the block it is
+				// streaming, with that block alone.
+				if len(m.Message.Content) == 1 && t.active >= 0 {
+					index = t.active
+				}
+				p.text(t, blockKey(t.messageID, index), c.Text)
+			case "tool_use":
+				if _, seen := p.toolNames[c.ID]; seen {
+					continue
+				}
+				p.toolNames[c.ID] = c.Name
+				p.emit(wire.Event{Type: wire.EventToolCall, ID: c.ID, Name: c.Name, Arguments: c.Input})
+			}
+		}
+	case "user":
+		for _, c := range m.Message.Content {
+			if c.Type == "tool_result" {
+				p.emit(wire.Event{Type: wire.EventToolResult, ID: c.ToolUseID, Name: p.toolNames[c.ToolUseID], Result: c.Content, IsError: c.IsError})
+			}
+		}
+	}
+}
+
+// text emits what a block's final text adds to what was streamed of it.
+// Events only append, so a final text that rewrites the streamed text adds
+// nothing.
+func (p *claudeParser) text(t *claudeThread, key, final string) {
+	streamed := t.text[key]
+	if len(final) <= len(streamed) || !strings.HasPrefix(final, streamed) {
+		return
+	}
+	t.text[key] = final
+	p.emit(wire.Event{Type: wire.EventText, Text: final[len(streamed):]})
+}
+
+func blockKey(messageID string, index int) string {
+	return messageID + ":" + strconv.Itoa(index)
 }
 
 // Codex runs `codex exec --json`, resuming the thread when there is one.
