@@ -92,7 +92,18 @@ progress live. It cuts a line from the coding agent over 1 MiB short.
 
 **`text` events append to the agent's answer.** Claude Code's text streams as
 it is written, a few words per event, and each piece arrives once. Codex's
-text arrives one message per event.
+text arrives one message per event. kagent joins text into one artifact
+until a tool event, so the first text of a message that follows another
+message with no tool event between starts with a blank line (`\n\n`). For
+Claude Code each text block is a message, also when only thinking is
+between two of them.
+
+**Every step the coding agent takes is a `tool_call` and its `tool_result`.**
+For Codex: a command is `shell`, with `command`; a file change is
+`file_change`; a web search is `web_search`, with `query`, reported when it
+has finished; an MCP tool is `mcp__<server>__<tool>`, as Claude Code names
+it, with the tool's arguments and its text result. A failed command or MCP
+call has `is_error`. Codex's reasoning and to-do list are not events.
 
 **A turn that runs longer than the runner's `--turn-timeout` ends with a
 `failure`** that says so, after the runner stops the coding agent.

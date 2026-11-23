@@ -12,6 +12,35 @@ import (
 // Emit sends one event to the harness.
 type Emit func(wire.Event)
 
+// messages keeps the coding agent's messages apart in its text. kagent joins
+// text events into one artifact until a tool event, so the text of a message
+// that follows another message, with no tool between, starts with a blank
+// line. Without it "…what I'll do." and "The answer…" run together.
+type messages struct {
+	emit Emit
+	// last is the message of the last text event, and empty after any other
+	// event.
+	last string
+}
+
+// text emits a piece of the message's text.
+func (m *messages) text(message, text string) {
+	if text == "" {
+		return
+	}
+	if m.last != "" && m.last != message {
+		text = "\n\n" + text
+	}
+	m.last = message
+	m.emit(wire.Event{Type: wire.EventText, Text: text})
+}
+
+// event emits an event that is not text, which ends the text run.
+func (m *messages) event(ev wire.Event) {
+	m.last = ""
+	m.emit(ev)
+}
+
 // newEmitter writes one event per line and flushes it, so the harness sees
 // the coding agent's progress as it happens. It adds the machine to session
 // events and cuts an event over wire.MaxEventBytes short.
