@@ -338,6 +338,23 @@ func TestFailedClaudeQuotesStderr(t *testing.T) {
 	}
 }
 
+// Claude Code 2.1.323's output when its login's refresh fails.
+const claudeSignedOut = `echo '{"type":"system","subtype":"init","session_id":"s1"}'
+echo '{"type":"assistant","error":"authentication_failed","is_api_error_message":true,"message":{"id":"m1","model":"<synthetic>","content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}'
+echo '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}'
+exit 1`
+
+func TestSignedOutClaudeSaysSo(t *testing.T) {
+	fakeClaude(t, claudeSignedOut)
+	srv := newTestRunner(t, Config{})
+	evs := events(t, post(t, t.Context(), srv.URL, testToken, wire.TurnRequest{Prompt: "x"}))
+	last := evs[len(evs)-1]
+	want := ErrClaudeSignedOut.Error() + ": Failed to authenticate: OAuth session expired and could not be refreshed"
+	if last.Type != wire.EventFailure || last.Message != want {
+		t.Fatalf("failure = %+v, want %q", last, want)
+	}
+}
+
 func TestCodexArgs(t *testing.T) {
 	c := Codex{Sandbox: "workspace-write", ExtraArgs: []string{"--x"}}
 	args, stdin := c.Args(wire.TurnRequest{Prompt: "p", Instructions: "i", Model: "m"}, "/w")

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,8 +47,7 @@ type Container struct {
 	WorkerArgs    []string
 	Idle          time.Duration
 
-	mu                   sync.Mutex
-	claudeWorkspaceReady bool
+	mu sync.Mutex
 	// Pinned across idle worker removal for the lifetime of this supervisor.
 	pulledImageID string
 	id            string
@@ -139,6 +139,52 @@ for file in auth.json auth.lock; do
 done
 exec remote-harness "$@"`
 
+// claudeLoginEntrypoint runs Claude Code through a wrapper that keeps the
+// shared login on the credential volume current. Claude refreshes its login
+// in the workspace's $CLAUDE_CONFIG_DIR, and a refresh replaces the
+// single-use refresh token, so the refreshed login must reach the volume. A
+// file mount cannot carry it: Claude saves by replacing the file. Before and
+// after each run, the wrapper publishes the workspace's login if Claude
+// changed it since the last sync, or else takes the volume's, which another
+// workspace or a new sign-in may have changed. When both changed, the
+// volume's wins. A run that is killed publishes at the start of the next.
+const claudeLoginEntrypoint = `set -eu
+CLAUDE_LOGIN_CLI=$(command -v claude)
+export CLAUDE_LOGIN_CLI
+mkdir -p /run/claude-bin
+cat > /run/claude-bin/claude <<'EOF'
+#!/bin/sh
+set -eu
+umask 077
+login=/run/claude-login/.credentials.json
+cred="$CLAUDE_CONFIG_DIR/.credentials.json"
+synced="$CLAUDE_CONFIG_DIR/.credentials.synced"
+sync() (
+  flock -w 10 9 || exit 1
+  if [ -s "$cred" ] && [ -s "$synced" ] && ! cmp -s "$cred" "$synced" && cmp -s "$login" "$synced"; then
+    stage=$(mktemp /run/claude-login/.login.XXXXXX) || exit 1
+    { cp "$cred" "$stage" && mv -f "$stage" "$login"; } || { rm -f "$stage"; exit 1; }
+  elif [ -s "$login" ] && ! cmp -s "$login" "$cred"; then
+    { cp "$login" "$cred.sync" && mv -f "$cred.sync" "$cred"; } || exit 1
+  fi
+  if [ -s "$cred" ]; then
+    { cp "$cred" "$synced.sync" && mv -f "$synced.sync" "$synced"; } || exit 1
+  fi
+) 9>>/run/claude-login/claude.lock
+mkdir -p "$CLAUDE_CONFIG_DIR"
+sync || echo 'Could not load the saved Claude login' >&2
+status=0
+"$CLAUDE_LOGIN_CLI" "$@" || status=$?
+sync || echo 'Could not save the refreshed Claude login' >&2
+exit "$status"
+EOF
+chmod 755 /run/claude-bin/claude
+# Without it, Claude would run without the saved login.
+test -x /run/claude-bin/claude || { echo 'Cannot run the Claude login wrapper' >&2; exit 1; }
+PATH=/run/claude-bin:$PATH
+export PATH
+exec remote-harness "$@"`
+
 func (c *Container) useLogin(ctx context.Context, opts *client.ContainerCreateOptions) error {
 	name := c.loginVolume
 	if name == "" {
@@ -161,10 +207,14 @@ func (c *Container) useLogin(ctx context.Context, opts *client.ContainerCreateOp
 		VolumeOptions: &mount.VolumeOptions{NoCopy: true, Subpath: "auth"},
 	}
 	if c.harness == "claude" {
-		// Claude replaces a symlink during refresh. A direct file mount keeps
-		// refreshes on the credential volume and everything else in /work.
-		credential.Target = "/work/state/claude/.credentials.json"
-		credential.VolumeOptions.Subpath = "auth/.credentials.json"
+		credential.Target = "/run/claude-login"
+		opts.Config.Entrypoint = []string{"/bin/sh", "-ec", claudeLoginEntrypoint, "claude-login"}
+		// The Engine mounts a tmpfs noexec unless told otherwise, and the
+		// wrapper must run.
+		if opts.HostConfig.Tmpfs == nil {
+			opts.HostConfig.Tmpfs = map[string]string{}
+		}
+		opts.HostConfig.Tmpfs["/run/claude-bin"] = "rw,exec,nosuid,nodev,size=64k,uid=10001,gid=10001,mode=0755"
 	} else {
 		opts.Config.Entrypoint = []string{"/bin/sh", "-ec", codexLoginEntrypoint, "codex-login"}
 	}
@@ -196,25 +246,6 @@ func (c *Container) start(ctx context.Context) error {
 			Mounts:         []mount.Mount{{Type: mount.TypeVolume, Source: c.Volume, Target: "/work"}},
 			Resources:      container.Resources{Memory: 4 << 30, NanoCPUs: 2e9, PidsLimit: &pids},
 		},
-	}
-	if c.harness == "claude" && c.loginVolume != "" && !c.claudeWorkspaceReady {
-		// The Engine would otherwise create the mount's parent owned by root
-		// and Claude could not lock or refresh its login. Existing workspaces
-		// retain their directory, permissions and session history.
-		host := *options.HostConfig
-		request := client.ContainerCreateOptions{
-			Config: &container.Config{Image: image, User: "10001:10001", Entrypoint: []string{"/bin/sh", "-ec"},
-				Cmd: []string{`mkdir -p "$CLAUDE_CONFIG_DIR"`}, AttachStderr: true},
-			HostConfig: &host,
-		}
-		status, err := runSetup(ctx, c.engine, request, nil, os.Stderr)
-		if err != nil {
-			return fmt.Errorf("prepare Claude workspace: %w", err)
-		}
-		if status != 0 {
-			return fmt.Errorf("prepare Claude workspace exited with status %d", status)
-		}
-		c.claudeWorkspaceReady = true
 	}
 	if c.workspace != "" {
 		options.HostConfig.Mounts = append(options.HostConfig.Mounts, mount.Mount{
@@ -311,7 +342,7 @@ func (c *Container) exchange(turn wire.TurnRequest, emit runner.Emit) (error, bo
 		case wire.EventDone:
 			return nil, true
 		case wire.EventFailure:
-			return errors.New(event.Message), true
+			return errors.New(c.failureHint(event.Message)), true
 		default:
 			emit(event)
 		}
@@ -320,6 +351,19 @@ func (c *Container) exchange(turn wire.TurnRequest, emit runner.Emit) (error, bo
 		return err, false
 	}
 	return errors.New("runner image closed its worker stream before the turn finished; use an image with the worker command"), false
+}
+
+// failureHint says how to fix a turn that failed because Claude Code is no
+// longer signed in. A saved login that failed this way no longer passes the
+// login check, so a restart in a terminal asks to sign in again.
+func (c *Container) failureHint(message string) string {
+	if !strings.Contains(message, runner.ErrClaudeSignedOut.Error()) {
+		return message
+	}
+	if c.loginVolume != "" {
+		return message + ". Restart the server in a terminal to sign in again"
+	}
+	return message + ". Set a valid CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY"
 }
 
 func (c *Container) Close() error {

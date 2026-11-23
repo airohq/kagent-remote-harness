@@ -152,29 +152,44 @@ func (c Claude) Run(ctx context.Context, p Process, turn wire.TurnRequest, emit 
 	args, stdin := c.Args(turn, p.Dir)
 	p.Env = ClaudeEnv(p.Env)
 	var result *claudeMessage
+	signedOut := false
 	parser := newClaudeParser(emit)
 	err := p.Stream(ctx, c.Command(), args, stdin, func(line []byte) {
 		var m claudeMessage
 		if json.Unmarshal(line, &m) != nil {
 			return // not a message, such as a warning
 		}
-		if m.Type == "result" {
+		switch {
+		case m.Type == "result":
 			result = &m
 			return
+		case m.Type == "assistant" && m.Error == "authentication_failed":
+			signedOut = true
 		}
 		parser.parse(m)
 	})
+	if ctx.Err() != nil {
+		return err
+	}
+	// Claude exits with status 1 after an error result; its result says why.
+	if result != nil && result.IsError {
+		if signedOut {
+			return fmt.Errorf("%w: %s", ErrClaudeSignedOut, result.Result)
+		}
+		return fmt.Errorf("claude: %s %s", result.Subtype, result.Result)
+	}
 	if err != nil {
 		return err
 	}
 	if result == nil {
 		return errors.New("claude ended without a result")
 	}
-	if result.IsError {
-		return fmt.Errorf("claude: %s %s", result.Subtype, result.Result)
-	}
 	return nil
 }
+
+// ErrClaudeSignedOut is a turn's failure when Claude Code's login no longer
+// works, such as when its refresh token was used up or revoked.
+var ErrClaudeSignedOut = errors.New("claude is not signed in")
 
 type claudeMessage struct {
 	Type            string `json:"type"`
@@ -183,7 +198,10 @@ type claudeMessage struct {
 	ParentToolUseID string `json:"parent_tool_use_id"`
 	IsError         bool   `json:"is_error"`
 	Result          string `json:"result"`
-	Event           struct {
+	// Error names an API error, on the assistant message Claude Code writes
+	// for it, such as "authentication_failed".
+	Error string `json:"error"`
+	Event struct {
 		Type    string `json:"type"`
 		Index   int    `json:"index"`
 		Message struct {

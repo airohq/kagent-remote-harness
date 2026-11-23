@@ -63,20 +63,61 @@ func (o *Options) PrepareCredentials(ctx context.Context, application string, te
 	return nil
 }
 
-func missingCredentials(harness string) error {
+func missingCredentials(harness string, expired bool) error {
 	keys := "CODEX_API_KEY or OPENAI_API_KEY"
 	if harness == "claude" {
 		keys = "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY"
 	}
+	if expired {
+		return fmt.Errorf("the saved %s login on this container engine has expired or was signed out: rerun this command in a terminal to sign in again, or set %s", harness, keys)
+	}
 	return fmt.Errorf("no saved %s login on this container engine: rerun this command in a terminal to sign in, or set %s", harness, keys)
 }
 
-// Provider CLIs keep settings and logs in tmpfs. Publish only a completed
-// credential. A failed or cancelled sign-in leaves the previous login intact.
-const prepareLoginScript = `set -eu
+// Exit statuses of checkLoginScript.
+const (
+	loginMissing = 42
+	loginExpired = 43
+)
+
+// checkLoginScript checks a saved login without network access. Online, the
+// provider CLIs refresh an expired token while checking, which replaces the
+// single-use refresh token in the copy they check, and leaves the saved login
+// with a spent one. Claude also reports a login whose refresh failed as
+// signed in, so the script reads its tokens and the end of the sign-in too.
+const checkLoginScript = `set -eu
 umask 077
 harness=$1
-interactive=$2
+auth_dir=/work/auth
+mkdir -p "$HOME" /run/airo-login
+case "$harness" in
+  claude) file=.credentials.json ;;
+  codex) file=auth.json ;;
+  *) exit 1 ;;
+esac
+[ -s "$auth_dir/$file" ] || exit 42
+cp "$auth_dir/$file" "/run/airo-login/$file"
+case "$harness" in
+  claude)
+    status=$(claude auth status 2>/dev/null) || exit 43
+    node -e '
+      const fs = require("fs");
+      const oauth = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).claudeAiOauth || {};
+      const status = JSON.parse(process.argv[2]);
+      const soon = Date.now() + 10 * 60 * 1000;
+      const end = status.loginExpiresAt == null ? NaN : new Date(status.loginExpiresAt).getTime();
+      const live = status.loggedIn && !(end <= soon) &&
+        (oauth.refreshToken || (oauth.accessToken && oauth.expiresAt > soon));
+      process.exit(live ? 0 : 1);
+    ' "/run/airo-login/$file" "$status" || exit 43 ;;
+  codex) codex -c 'cli_auth_credentials_store="file"' login status >/dev/null 2>&1 || exit 43 ;;
+esac`
+
+// Provider CLIs keep settings and logs in tmpfs. Publish only a completed
+// credential. A failed or cancelled sign-in leaves the previous login intact.
+const signInScript = `set -eu
+umask 077
+harness=$1
 auth_dir=/work/auth
 mkdir -p "$HOME" "$auth_dir" /run/airo-login
 exec 7>>"$auth_dir/setup.lock"
@@ -86,15 +127,6 @@ case "$harness" in
   codex) file=auth.json ;;
   *) exit 1 ;;
 esac
-if [ -s "$auth_dir/$file" ]; then
-  cp "$auth_dir/$file" "/run/airo-login/$file"
-  case "$harness" in
-    claude) if claude auth status >/dev/null 2>&1; then exit 0; fi ;;
-    codex) if codex -c 'cli_auth_credentials_store="file"' login status >/dev/null 2>&1; then exit 0; fi ;;
-  esac
-  rm -f "/run/airo-login/$file"
-fi
-[ "$interactive" = yes ] || exit 42
 case "$harness" in
   claude) claude auth login --claudeai ;;
   codex) codex -c 'cli_auth_credentials_store="file"' login --device-auth ;;
@@ -110,7 +142,7 @@ stage=$(mktemp "$auth_dir/.login.XXXXXX")
 trap 'rm -f "$stage"' EXIT
 cp "/run/airo-login/$file" "$stage"
 mv -fT "$stage" "$auth_dir/$file"
-printf 'Saved %s login in container volume %s.\n' "$harness" "$3" >&2`
+printf 'Saved %s login in container volume %s.\n' "$harness" "$2" >&2`
 
 func prepareContainerLogin(ctx context.Context, e *client.Client, image, volume, harness string, terminal *os.File, out io.Writer) error {
 	label := loginLabel(harness)
@@ -118,7 +150,7 @@ func prepareContainerLogin(ctx context.Context, e *client.Client, image, volume,
 	switch {
 	case errdefs.IsNotFound(err):
 		if terminal == nil {
-			return missingCredentials(harness)
+			return missingCredentials(harness, false)
 		}
 		created, err := e.VolumeCreate(ctx, client.VolumeCreateOptions{Name: volume, Labels: map[string]string{label: volume}})
 		if err != nil {
@@ -142,21 +174,56 @@ func prepareContainerLogin(ctx context.Context, e *client.Client, image, volume,
 	} else if err != nil {
 		return err
 	}
-	interactive := "no"
-	if terminal != nil {
-		interactive = "yes"
+	status, err := runSetup(ctx, e, loginRequest(image, volume, checkLoginScript, harness, false), nil, out)
+	if err != nil {
+		return err
 	}
-	forwardInput := harness == "claude" && terminal != nil
-	request := client.ContainerCreateOptions{
+	switch status {
+	case 0:
+		return nil
+	case loginMissing, loginExpired:
+	default:
+		return fmt.Errorf("%s login check exited with status %d", harness, status)
+	}
+	expired := status == loginExpired
+	if terminal == nil {
+		return missingCredentials(harness, expired)
+	}
+	if expired {
+		fmt.Fprintf(out, "The saved %s login has expired or was signed out. Sign in again.\n", harness)
+	}
+	request := loginRequest(image, volume, signInScript, harness, harness == "claude")
+	if harness != "claude" {
+		terminal = nil
+	}
+	status, err = runSetup(ctx, e, request, terminal, out)
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return fmt.Errorf("%s subscription setup exited with status %d", harness, status)
+	}
+	return nil
+}
+
+// loginRequest runs script on the login volume. Only a sign-in reaches the
+// network, and only Claude's sign-in reads the terminal.
+func loginRequest(image, volume, script, harness string, forwardInput bool) client.ContainerCreateOptions {
+	network := container.NetworkMode("none")
+	if script == signInScript {
+		network = ""
+	}
+	return client.ContainerCreateOptions{
 		Config: &container.Config{
 			Image: image, User: "10001:10001",
 			Entrypoint:   []string{"/bin/sh", "-ec"},
-			Cmd:          []string{prepareLoginScript, "prepare-login", harness, interactive, volume},
+			Cmd:          []string{script, "login", harness, volume},
 			Env:          []string{"CODEX_HOME=/run/airo-login", "HOME=/tmp/home", "CLAUDE_CONFIG_DIR=/run/airo-login"},
 			AttachStdout: true, AttachStderr: true,
 			AttachStdin: forwardInput, OpenStdin: forwardInput, StdinOnce: forwardInput,
 		},
 		HostConfig: &container.HostConfig{
+			NetworkMode:    network,
 			ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"},
 			LogConfig: container.LogConfig{Type: "none"},
 			Tmpfs: map[string]string{
@@ -166,20 +233,6 @@ func prepareContainerLogin(ctx context.Context, e *client.Client, image, volume,
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: volume, Target: "/work"}},
 		},
 	}
-	if !forwardInput {
-		terminal = nil
-	}
-	status, err := runSetup(ctx, e, request, terminal, out)
-	if err != nil {
-		return err
-	}
-	if status == 42 {
-		return missingCredentials(harness)
-	}
-	if status != 0 {
-		return fmt.Errorf("%s subscription setup exited with status %d", harness, status)
-	}
-	return nil
 }
 
 // runSetup attaches before start so the provider's prompt cannot be missed.
