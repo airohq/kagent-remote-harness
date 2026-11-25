@@ -8,8 +8,13 @@ WORKDIR /src
 # Build the two modules from this checkout, including unpublished runner fixes.
 COPY go.work go.work.sum go.mod go.sum ./
 COPY runner/go.mod runner/go.sum ./runner/
+# The module proxy sometimes resets a stream; what was downloaded stays in the
+# cache, so a retry continues where it stopped.
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    for attempt in 1 2 3; do \
+        go mod download && exit 0; \
+        echo "go mod download failed (attempt $attempt), retrying" >&2; sleep 10; \
+    done; exit 1
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY wire/ wire/
