@@ -242,7 +242,7 @@ supervisor directly, set `REMOTE_HARNESS_TOKEN` to a fresh token of at least
 ```sh
 dir=$(mktemp -d)
 remote-harness supervise --name reviewer --socket "$dir/runner.sock" \
-  --image local/remote-harness:dev --harness codex --codex-sandbox workspace-write
+  --image local/remote-harness:dev --harness codex --codex-sandbox danger-full-access
 ```
 
 `--idle-timeout` sets how long to keep a warm worker. `--turn-timeout` bounds
@@ -290,8 +290,11 @@ runs on your machine:
   one, so it gets the instructions at the start of a new conversation.
 - **`<mode>` and `<sandbox>` have no default.** You choose what the coding
   agent does without asking, with `--claude-permission-mode` or
-  `--codex-sandbox`, because nothing can ask you. See
-  [Approvals](docs/security.md#approvals).
+  `--codex-sandbox`, because nothing can ask you. In the hardened
+  container, use `--codex-sandbox danger-full-access`: Codex's own sandbox
+  needs Linux user namespaces, which the container denies, so with
+  `read-only` or `workspace-write` every shell command fails. The container
+  is then what limits a turn. See [Approvals](docs/security.md#approvals).
 - **`<harness args>` are your own flags**, from `--harness-arg`, such as
   `--harness-arg=--disallowedTools=Bash` to take a tool away. The supervisor
   accepts this repeatable flag too. Each occurrence carries one literal argument
@@ -343,7 +346,7 @@ spec:
 | `--harness` | Required | `claude` or `codex` |
 | `--machine` | The name kept in `--state-dir`, else the host name | The machine's name, which ties a conversation to it. A container gets a new host name on every start, so the image keeps the first one on the volume |
 | `--claude-permission-mode` | Required with `claude` | Claude Code's `--permission-mode`, such as `acceptEdits` |
-| `--codex-sandbox` | Required with `codex` | Codex's `--sandbox`, such as `workspace-write` |
+| `--codex-sandbox` | Required with `codex` | Codex's `--sandbox`: `danger-full-access` in a container |
 | `--harness-arg` | None | A flag to add to the CLI's command; repeatable |
 | `--token-file` | | The file holding the token every request must carry |
 | `REMOTE_HARNESS_TOKEN` | | The token, when there is no `--token-file`. One of the two is required |

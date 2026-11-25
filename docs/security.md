@@ -41,7 +41,7 @@ can reach the prompt:
 | The prompt comes from | Run the coding agent |
 | --- | --- |
 | Only you, or people you trust with your machine | Unattended, in a hardened container |
-| People you trust, through text others can edit, such as an issue they label | With tools taken away (`--harness-arg=--disallowedTools=Bash`), or Codex with `--codex-sandbox read-only` |
+| People you trust, through text others can edit, such as an issue they label | With tools taken away (`--harness-arg=--disallowedTools=Bash`), or Codex with `--codex-sandbox read-only` outside a container |
 | Anyone | In a disposable environment, such as a fresh VM or container per conversation, holding no credentials worth taking |
 
 Approvals in kagent, so that you confirm an action before it runs, are the
@@ -106,8 +106,15 @@ does without asking; the runner has no default:
 | Harness | Flag | For example | What it does without asking |
 | --- | --- | --- | --- |
 | `claude` | `--claude-permission-mode` | `acceptEdits` | Edits files. Refuses other tools that need approval, unless the project's Claude Code settings allow them |
-| `codex` | `--codex-sandbox` | `workspace-write` | Edits files and runs commands in the working directory |
-| `codex` | `--codex-sandbox` | `read-only` | Reads files and runs read-only commands |
+| `codex` | `--codex-sandbox` | `danger-full-access` | Edits files and runs any command the container allows |
+| `codex` | `--codex-sandbox` | `workspace-write` | Edits files and runs commands in the working directory. Not in a container |
+| `codex` | `--codex-sandbox` | `read-only` | Reads files and runs read-only commands. Not in a container |
+
+**In a container, run Codex with `danger-full-access`; the container is its
+sandbox.** Codex enforces `workspace-write` and `read-only` with bubblewrap,
+which needs Linux user namespaces. The hardened container denies them, so
+Codex refuses every shell command. Outside a container, such as the runner
+on your Mac or a Linux host that allows user namespaces, those modes work.
 
 **What you allow in the coding agent's own settings, you allow for every turn
 from kagent**, such as `Bash` in Claude Code's allowed tools.
